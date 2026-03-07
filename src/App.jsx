@@ -2,6 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { BrowserRouter, Link, Routes, Route, useNavigate, useParams } from 'react-router-dom';
 import { ChronikClient } from 'chronik-client';
 import * as ecashaddr from 'ecashaddrjs';
+import { findLinajeTxidBySlug } from './data/linajeIndex';
+import { resolveLinajeMeta } from './data/linajeMeta';
 
 const CHRONIK_URL = 'https://chronik.xolosarmy.xyz';
 const chronik = new ChronikClient(CHRONIK_URL);
@@ -52,13 +54,11 @@ function outputScriptToAddress(outputScript) {
   try {
     if (!outputScript || typeof outputScript !== 'string') return null;
 
-    // P2PKH: 76a914{20-byte-hash}88ac
     if (outputScript.startsWith('76a914') && outputScript.endsWith('88ac') && outputScript.length === 50) {
       const hash = outputScript.slice(6, -4);
       return ecashaddr.encodeCashAddress('ecash', 'p2pkh', hash);
     }
 
-    // P2SH: a914{20-byte-hash}87
     if (outputScript.startsWith('a914') && outputScript.endsWith('87') && outputScript.length === 46) {
       const hash = outputScript.slice(4, -2);
       return ecashaddr.encodeCashAddress('ecash', 'p2sh', hash);
@@ -74,15 +74,121 @@ function isOpReturn(outputScript) {
   return typeof outputScript === 'string' && outputScript.startsWith('6a');
 }
 
-function decodeOpReturnHex(hex) {
-  if (!hex || !hex.startsWith('6a')) return null;
+function decodeHexToAscii(hex) {
   try {
-    // decodificación simple para el MVP
-    const body = hex.slice(2);
-    return body;
+    if (!hex || typeof hex !== 'string') return '';
+    let clean = hex.replace(/^6a/, '');
+    if (clean.length % 2 !== 0) return clean;
+    const bytes = clean.match(/.{1,2}/g) || [];
+    let text = '';
+    for (const b of bytes) {
+      const code = parseInt(b, 16);
+      if (Number.isNaN(code)) continue;
+      text += code >= 32 && code <= 126 ? String.fromCharCode(code) : '.';
+    }
+    return text;
   } catch {
-    return null;
+    return '';
   }
+}
+
+function extractOpReturnText(outputScript) {
+  if (!isOpReturn(outputScript)) return null;
+  const ascii = decodeHexToAscii(outputScript);
+  return ascii || outputScript;
+}
+
+// Formato oficial de registro de linaje:
+// XOLO|RAMIREZ|NOMBRE=TIKA|NAC=2025-10-06|LUGAR=CDMX|SEXO=H|COLOR=NEGRO|VAR=SINPELO
+function isXolosLinajeRecord(text) {
+  if (!text || typeof text !== 'string') return false;
+  return text.startsWith('XOLO|RAMIREZ|');
+}
+
+function parseLinajeRecord(text) {
+  if (!isXolosLinajeRecord(text)) return null;
+
+  const parts = text.split('|');
+  const data = {};
+
+  for (const part of parts.slice(2)) {
+    const [key, ...rest] = part.split('=');
+    if (!key || rest.length === 0) continue;
+    data[key] = rest.join('=');
+  }
+
+  return data;
+}
+
+function isHex64(value) {
+  return typeof value === 'string' && /^[0-9a-fA-F]{64}$/.test(value);
+}
+
+function slugify(value) {
+  if (!value || typeof value !== 'string') return '';
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function buildLinajeSlug(parsed) {
+  const nameSlug = slugify(parsed?.NOMBRE || '');
+  if (!nameSlug) return '';
+  if (nameSlug.endsWith('-ramirez') || nameSlug === 'ramirez') return nameSlug;
+  return `${nameSlug}-ramirez`;
+}
+
+function extractLinajeRecordsFromTx(tx) {
+  return (tx?.outputs || [])
+    .filter((o) => isOpReturn(o.outputScript))
+    .map((o) => {
+      const text = extractOpReturnText(o.outputScript);
+      const parsed = parseLinajeRecord(text);
+      return {
+        text,
+        parsed,
+        slug: buildLinajeSlug(parsed),
+      };
+    })
+    .filter((op) => isXolosLinajeRecord(op.text));
+}
+
+function enrichLinajeRecord(record, txid) {
+  const slug = record?.slug || buildLinajeSlug(record?.parsed);
+  const indexedTxid = slug ? findLinajeTxidBySlug(slug) : '';
+  const editorialMeta = resolveLinajeMeta({ slug, txid });
+  return {
+    ...record,
+    slug,
+    indexedTxid,
+    editorialMeta,
+  };
+}
+
+async function fetchRecentLinajeMatches(maxBlocks = 20, txPageSize = 25) {
+  const tip = await chronik.blockchainInfo();
+  const tipHeight = tip.tipHeight;
+
+  const heights = [];
+  for (let h = tipHeight; h > Math.max(0, tipHeight - (maxBlocks - 1)); h--) {
+    heights.push(h);
+  }
+
+  const txPages = await Promise.all(
+    heights.map((h) => chronik.blockTxs(h.toString(), 0, txPageSize))
+  );
+
+  const allTxs = txPages.flatMap((page) => page.txs || []);
+
+  return allTxs
+    .map((tx) => ({
+      tx,
+      opReturns: extractLinajeRecordsFromTx(tx),
+    }))
+    .filter((item) => item.opReturns.length > 0);
 }
 
 function Box({ children, style = {} }) {
@@ -122,6 +228,12 @@ function Shell({ children }) {
           <Box style={{ marginBottom: '20px' }}>
             <div><strong>Endpoint:</strong> {CHRONIK_URL}</div>
           </Box>
+
+          <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', marginBottom: '20px' }}>
+            <Link to="/explorer" style={{ color: '#00eaff' }}>Explorer</Link>
+            <Link to="/linaje" style={{ color: '#00eaff' }}>Linaje</Link>
+            <Link to="/block/9000" style={{ color: '#00eaff' }}>Bloque ejemplo</Link>
+          </div>
         </div>
         {children}
       </div>
@@ -253,6 +365,441 @@ function SectionTitle({ children }) {
   return <h2 style={{ marginTop: '28px', marginBottom: '12px' }}>{children}</h2>;
 }
 
+function LinajeCard({ tx, opReturnText, parsed, slug = '', editorialMeta = null, indexedTxid = '', showDetailLink = true }) {
+  const sexoMap = {
+    H: 'Hembra',
+    M: 'Macho',
+  };
+  const [imageFailed, setImageFailed] = React.useState(false);
+
+  const resolvedSlug = slug || buildLinajeSlug(parsed);
+  const localMeta = editorialMeta || resolveLinajeMeta({ slug: resolvedSlug, txid: tx?.txid });
+  const displayName = localMeta?.title || localMeta?.nombreCompleto || parsed?.NOMBRE || 'Sin nombre';
+  const displaySexo = localMeta?.sexo || (parsed?.SEXO ? sexoMap[parsed.SEXO] || parsed.SEXO : '—');
+  const mediaUrl = localMeta?.image || localMeta?.coverUrl || localMeta?.avatarUrl || '';
+  const placeholderText = localMeta?.imagePlaceholder || (displayName ? displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase() : 'XOLO');
+  const imageAlt = localMeta?.imageAlt || `Retrato de ${displayName}`;
+  const showImage = Boolean(mediaUrl) && !imageFailed;
+  const detailPath = resolvedSlug ? `/linaje/${resolvedSlug}` : `/linaje/${tx.txid}`;
+  const localIndexTxid = indexedTxid || (resolvedSlug ? findLinajeTxidBySlug(resolvedSlug) : '');
+  const hasIndexedSlug = isHex64(localIndexTxid);
+  const ficha = {
+    nombreCompleto: localMeta?.nombreCompleto || parsed?.NOMBRE || '—',
+    afijo: localMeta?.afijo || '—',
+    variedad: localMeta?.variedad || parsed?.VAR || '—',
+    color: localMeta?.color || parsed?.COLOR || '—',
+    sexo: displaySexo || '—',
+    lugarNacimiento: localMeta?.lugarNacimiento || parsed?.LUGAR || '—',
+    fechaNacimiento: localMeta?.fechaNacimiento || parsed?.NAC || '—',
+    criador: localMeta?.criador || '—',
+    padre: localMeta?.padre || '—',
+    madre: localMeta?.madre || '—',
+    camada: localMeta?.camada || '—',
+    microchip: localMeta?.microchip || '—',
+    registroFCM: localMeta?.registroFCM || '—',
+    entregaEstado: localMeta?.entregaEstado || '—',
+    nftLinaje: localMeta?.nftLinaje || '—',
+  };
+  const editorialText = localMeta?.narrative || localMeta?.nota || '';
+  const linkEntries = Array.isArray(localMeta?.links)
+    ? localMeta.links
+      .filter((item) => item?.href)
+      .map((item) => ({ label: item?.label || item?.href, href: item?.href }))
+    : Object.entries(localMeta?.links || {})
+      .filter(([, href]) => typeof href === 'string' && href.trim())
+      .map(([key, href]) => ({ label: key, href }));
+
+  return (
+    <div
+      style={{
+        border: '1px solid #00eaff',
+        background: 'linear-gradient(145deg, #071319 0%, #0b0b0b 55%, #0f1e24 100%)',
+        boxShadow: '0 0 0 1px #09333a inset, 0 0 18px rgba(0, 234, 255, 0.14)',
+        padding: '16px',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ color: '#8ff7ff', fontSize: '0.85rem', letterSpacing: '0.04em' }}>FICHA OFICIAL DE LINAJE</div>
+          <h3 style={{ margin: '6px 0 0', fontSize: '1.4rem', color: '#d6ffff' }}>{displayName}</h3>
+          {localMeta?.subtitle && (
+            <div style={{ marginTop: '6px', color: '#8ff7ff', fontSize: '0.95rem' }}>{localMeta.subtitle}</div>
+          )}
+        </div>
+        <div
+          style={{
+            border: '1px solid #2f6f7a',
+            background: '#0a1b20',
+            color: '#7dffe4',
+            padding: '6px 10px',
+            fontSize: '0.85rem',
+            fontWeight: 'bold',
+            textTransform: 'uppercase',
+          }}
+        >
+          XOLO | RAMIREZ
+        </div>
+      </div>
+
+      <div
+        style={{
+          marginTop: '14px',
+          border: '1px solid #1c515b',
+          background: 'radial-gradient(circle at 20% 20%, #124a55 0%, #0a1b20 45%, #061115 100%)',
+          minHeight: '200px',
+          display: 'grid',
+          placeItems: 'center',
+          overflow: 'hidden',
+        }}
+      >
+        {showImage ? (
+          <img
+            src={mediaUrl}
+            alt={imageAlt}
+            loading="lazy"
+            style={{ width: '100%', height: '100%', maxHeight: '320px', objectFit: 'cover', display: 'block' }}
+            onError={() => setImageFailed(true)}
+          />
+        ) : (
+          <div style={{ color: '#9bdfff', letterSpacing: '0.12em', fontSize: '1.15rem' }}>
+            {placeholderText || 'XOLO'}
+          </div>
+        )}
+      </div>
+
+      <div
+        style={{
+          marginTop: '14px',
+          display: 'grid',
+          gap: '10px',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
+        }}
+      >
+        <Box style={{ background: 'rgba(1, 34, 40, 0.55)', borderColor: '#1c515b', padding: '10px' }}>
+          <div style={{ color: '#8ff7ff', fontSize: '0.85rem' }}>Nombre completo</div>
+          <strong>{ficha.nombreCompleto}</strong>
+        </Box>
+        <Box style={{ background: 'rgba(1, 34, 40, 0.55)', borderColor: '#1c515b', padding: '10px' }}>
+          <div style={{ color: '#8ff7ff', fontSize: '0.85rem' }}>Afijo</div>
+          <strong>{ficha.afijo}</strong>
+        </Box>
+        <Box style={{ background: 'rgba(1, 34, 40, 0.55)', borderColor: '#1c515b', padding: '10px' }}>
+          <div style={{ color: '#8ff7ff', fontSize: '0.85rem' }}>Sexo</div>
+          <strong>{ficha.sexo}</strong>
+        </Box>
+        <Box style={{ background: 'rgba(1, 34, 40, 0.55)', borderColor: '#1c515b', padding: '10px' }}>
+          <div style={{ color: '#8ff7ff', fontSize: '0.85rem' }}>Color</div>
+          <strong>{ficha.color}</strong>
+        </Box>
+        <Box style={{ background: 'rgba(1, 34, 40, 0.55)', borderColor: '#1c515b', padding: '10px' }}>
+          <div style={{ color: '#8ff7ff', fontSize: '0.85rem' }}>Variedad</div>
+          <strong>{ficha.variedad}</strong>
+        </Box>
+        <Box style={{ background: 'rgba(1, 34, 40, 0.55)', borderColor: '#1c515b', padding: '10px' }}>
+          <div style={{ color: '#8ff7ff', fontSize: '0.85rem' }}>Fecha de nacimiento</div>
+          <strong>{ficha.fechaNacimiento}</strong>
+        </Box>
+        <Box style={{ background: 'rgba(1, 34, 40, 0.55)', borderColor: '#1c515b', padding: '10px' }}>
+          <div style={{ color: '#8ff7ff', fontSize: '0.85rem' }}>Lugar de nacimiento</div>
+          <strong>{ficha.lugarNacimiento}</strong>
+        </Box>
+        <Box style={{ background: 'rgba(1, 34, 40, 0.55)', borderColor: '#1c515b', padding: '10px' }}>
+          <div style={{ color: '#8ff7ff', fontSize: '0.85rem' }}>Criador</div>
+          <strong>{ficha.criador}</strong>
+        </Box>
+      </div>
+
+      <div
+        style={{
+          marginTop: '10px',
+          display: 'grid',
+          gap: '10px',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
+        }}
+      >
+        <Box style={{ background: 'rgba(1, 34, 40, 0.55)', borderColor: '#1c515b', padding: '10px' }}>
+          <div style={{ color: '#8ff7ff', fontSize: '0.85rem' }}>Padre</div>
+          <strong>{ficha.padre}</strong>
+        </Box>
+        <Box style={{ background: 'rgba(1, 34, 40, 0.55)', borderColor: '#1c515b', padding: '10px' }}>
+          <div style={{ color: '#8ff7ff', fontSize: '0.85rem' }}>Madre</div>
+          <strong>{ficha.madre}</strong>
+        </Box>
+        <Box style={{ background: 'rgba(1, 34, 40, 0.55)', borderColor: '#1c515b', padding: '10px' }}>
+          <div style={{ color: '#8ff7ff', fontSize: '0.85rem' }}>Camada</div>
+          <strong>{ficha.camada}</strong>
+        </Box>
+        <Box style={{ background: 'rgba(1, 34, 40, 0.55)', borderColor: '#1c515b', padding: '10px' }}>
+          <div style={{ color: '#8ff7ff', fontSize: '0.85rem' }}>Microchip</div>
+          <strong>{ficha.microchip}</strong>
+        </Box>
+        <Box style={{ background: 'rgba(1, 34, 40, 0.55)', borderColor: '#1c515b', padding: '10px' }}>
+          <div style={{ color: '#8ff7ff', fontSize: '0.85rem' }}>Registro FCM</div>
+          <strong>{ficha.registroFCM}</strong>
+        </Box>
+        <Box style={{ background: 'rgba(1, 34, 40, 0.55)', borderColor: '#1c515b', padding: '10px' }}>
+          <div style={{ color: '#8ff7ff', fontSize: '0.85rem' }}>Estado de entrega</div>
+          <strong>{ficha.entregaEstado}</strong>
+        </Box>
+        <Box style={{ background: 'rgba(1, 34, 40, 0.55)', borderColor: '#1c515b', padding: '10px' }}>
+          <div style={{ color: '#8ff7ff', fontSize: '0.85rem' }}>NFT linaje</div>
+          <strong>{ficha.nftLinaje}</strong>
+        </Box>
+      </div>
+
+      <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px solid #17444d' }}>
+        {resolvedSlug && (
+          <div style={{ color: '#8ff7ff' }}>
+            <strong>Slug narrativo:</strong> {resolvedSlug}
+          </div>
+        )}
+        <div style={{ marginTop: '6px', color: '#8ff7ff' }}>
+          <strong>Índice local:</strong> {hasIndexedSlug ? 'Vinculado' : 'Sin vínculo'}
+        </div>
+        <div style={{ marginTop: '6px', color: '#8ff7ff' }}>
+          <strong>Capa editorial local:</strong> {localMeta ? 'Disponible' : 'No encontrada'}
+        </div>
+        <div style={{ color: '#8ff7ff' }}>
+          <strong>TXID:</strong> <TxLink txid={tx.txid} />
+        </div>
+        <div style={{ marginTop: '6px', color: '#8ff7ff' }}>
+          <strong>Bloque:</strong>{' '}
+          {tx.block?.height !== undefined ? (
+            <BlockLink hashOrHeight={tx.block.height}>{tx.block.height}</BlockLink>
+          ) : 'Mempool'}
+        </div>
+        {showDetailLink && (
+          <div style={{ marginTop: '8px' }}>
+            <Link to={detailPath} style={{ color: '#7dffe4' }}>
+              Ver registro individual
+            </Link>
+          </div>
+        )}
+      </div>
+
+      {editorialText && (
+        <Box style={{ marginTop: '12px', background: 'rgba(1, 34, 40, 0.55)', borderColor: '#1c515b', padding: '10px' }}>
+          <div style={{ color: '#8ff7ff', fontSize: '0.85rem', marginBottom: '6px' }}>Capa editorial</div>
+          <div style={{ color: '#d6ffff', lineHeight: 1.45 }}>{editorialText}</div>
+        </Box>
+      )}
+
+      {Array.isArray(localMeta?.tags) && localMeta.tags.length > 0 && (
+        <div style={{ marginTop: '10px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          {localMeta.tags.map((tag) => (
+            <span
+              key={tag}
+              style={{
+                border: '1px solid #1c515b',
+                background: '#0a1b20',
+                color: '#7dffe4',
+                padding: '4px 8px',
+                fontSize: '0.8rem',
+                textTransform: 'uppercase',
+              }}
+            >
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {linkEntries.length > 0 && (
+        <div style={{ marginTop: '10px', display: 'grid', gap: '6px' }}>
+          {linkEntries.map((item) => (
+            <a
+              key={`${item?.label || 'link'}-${item?.href || ''}`}
+              href={item?.href}
+              target="_blank"
+              rel="noreferrer"
+              style={{ color: '#7dffe4', wordBreak: 'break-word' }}
+            >
+              {item?.label || item?.href}
+            </a>
+          ))}
+        </div>
+      )}
+
+      <details style={{ marginTop: '12px' }}>
+        <summary style={{ cursor: 'pointer', color: '#9bdfff' }}>Ver OP_RETURN completo</summary>
+        <div
+          style={{
+            marginTop: '8px',
+            padding: '10px',
+            border: '1px solid #1c4048',
+            background: '#081316',
+            color: '#ffd37a',
+            wordBreak: 'break-word',
+            fontSize: '0.9rem',
+          }}
+        >
+          {opReturnText}
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function normalizeSexoFilterValue(value) {
+  const raw = (value || '').toString().trim().toLowerCase();
+  if (!raw) return 'desconocido';
+  if (raw === 'h' || raw === 'hembra') return 'hembra';
+  if (raw === 'm' || raw === 'macho') return 'macho';
+  return 'desconocido';
+}
+
+function LinajeGalleryCard({ record }) {
+  const sexoMap = { H: 'Hembra', M: 'Macho' };
+  const [imageFailed, setImageFailed] = React.useState(false);
+  const tx = record?.tx || null;
+  const parsed = record?.parsed || null;
+  const opReturnText = record?.opReturnText || record?.text || '';
+  const resolvedSlug = record?.slug || buildLinajeSlug(parsed);
+  const localMeta = record?.editorialMeta || resolveLinajeMeta({ slug: resolvedSlug, txid: tx?.txid });
+  const indexedTxid = record?.indexedTxid || (resolvedSlug ? findLinajeTxidBySlug(resolvedSlug) : '');
+  const displayName = localMeta?.title || localMeta?.nombreCompleto || parsed?.NOMBRE || 'Sin nombre';
+  const displaySexo = localMeta?.sexo || (parsed?.SEXO ? sexoMap[parsed.SEXO] || parsed.SEXO : '—');
+  const displayVariedad = localMeta?.variedad || parsed?.VAR || '—';
+  const displayColor = localMeta?.color || parsed?.COLOR || '—';
+  const hasIndexedSlug = isHex64(indexedTxid);
+  const detailPath = resolvedSlug ? `/linaje/${resolvedSlug}` : `/linaje/${tx?.txid || ''}`;
+  const mediaUrl = localMeta?.image || localMeta?.coverUrl || localMeta?.avatarUrl || '';
+  const placeholderText = localMeta?.imagePlaceholder || (displayName ? displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase() : 'XOLO');
+  const imageAlt = localMeta?.imageAlt || `Retrato de ${displayName}`;
+  const showImage = Boolean(mediaUrl) && !imageFailed;
+  const tags = Array.isArray(localMeta?.tags) ? localMeta.tags.filter(Boolean).slice(0, 3) : [];
+
+  return (
+    <article
+      style={{
+        border: '1px solid #00eaff',
+        background: 'linear-gradient(145deg, #071319 0%, #0b0b0b 55%, #0f1e24 100%)',
+        boxShadow: '0 0 0 1px #09333a inset, 0 0 18px rgba(0, 234, 255, 0.14)',
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          height: '140px',
+          borderBottom: '1px solid #1c515b',
+          background: 'radial-gradient(circle at 20% 20%, #124a55 0%, #0a1b20 45%, #061115 100%)',
+          display: 'grid',
+          placeItems: 'center',
+          overflow: 'hidden',
+        }}
+      >
+        {showImage ? (
+          <img
+            src={mediaUrl}
+            alt={imageAlt}
+            loading="lazy"
+            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+            onError={() => setImageFailed(true)}
+          />
+        ) : (
+          <div style={{ color: '#9bdfff', letterSpacing: '0.12em', fontSize: '0.95rem' }}>
+            {placeholderText || 'XOLO'}
+          </div>
+        )}
+      </div>
+
+      <div style={{ padding: '12px' }}>
+        <div style={{ color: '#8ff7ff', fontSize: '0.78rem', letterSpacing: '0.05em' }}>
+          ARCHIVO DEL LINAJE VIVO
+        </div>
+        <h3 style={{ margin: '6px 0 0', fontSize: '1.1rem', color: '#d6ffff', lineHeight: 1.2 }}>{displayName}</h3>
+
+        {localMeta?.subtitle && (
+          <div style={{ marginTop: '6px', color: '#8ff7ff', fontSize: '0.88rem' }}>{localMeta.subtitle}</div>
+        )}
+
+        <div style={{ marginTop: '10px', display: 'grid', gap: '6px', fontSize: '0.9rem', color: '#c3fbff' }}>
+          <div><strong style={{ color: '#8ff7ff' }}>Sexo:</strong> {displaySexo}</div>
+          <div><strong style={{ color: '#8ff7ff' }}>Variedad:</strong> {displayVariedad}</div>
+          <div><strong style={{ color: '#8ff7ff' }}>Color:</strong> {displayColor}</div>
+        </div>
+
+        <div style={{ marginTop: '10px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <span
+            style={{
+              border: '1px solid #1c515b',
+              background: '#0a1b20',
+              color: '#7dffe4',
+              padding: '3px 8px',
+              fontSize: '0.72rem',
+              textTransform: 'uppercase',
+            }}
+          >
+            {hasIndexedSlug ? 'Índice: vinculado' : 'Índice: sin vínculo'}
+          </span>
+          {resolvedSlug && (
+            <span
+              style={{
+                border: '1px solid #1c515b',
+                background: '#0a1b20',
+                color: '#7dffe4',
+                padding: '3px 8px',
+                fontSize: '0.72rem',
+              }}
+            >
+              {resolvedSlug}
+            </span>
+          )}
+        </div>
+
+        {tags.length > 0 && (
+          <div style={{ marginTop: '10px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            {tags.map((tag) => (
+              <span
+                key={tag}
+                style={{
+                  border: '1px solid #16424a',
+                  color: '#8ff7ff',
+                  background: 'rgba(1, 34, 40, 0.55)',
+                  padding: '2px 7px',
+                  fontSize: '0.72rem',
+                }}
+              >
+                #{tag}
+              </span>
+            ))}
+          </div>
+        )}
+
+        <div style={{ marginTop: '10px', color: '#8ff7ff', fontSize: '0.8rem' }}>
+          <strong>TX:</strong> {tx?.txid ? shortHex(tx.txid, 12, 10) : '—'}
+        </div>
+        <div style={{ marginTop: '4px', color: '#8ff7ff', fontSize: '0.8rem' }}>
+          <strong>Bloque:</strong> {tx?.block?.height !== undefined ? tx.block.height : 'Mempool'}
+        </div>
+
+        <div style={{ marginTop: '12px', display: 'flex', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
+          <Link to={detailPath} style={{ color: '#7dffe4' }}>
+            Abrir ficha
+          </Link>
+          <details>
+            <summary style={{ cursor: 'pointer', color: '#9bdfff', fontSize: '0.85rem' }}>OP_RETURN</summary>
+            <div
+              style={{
+                marginTop: '8px',
+                padding: '8px',
+                border: '1px solid #1c4048',
+                background: '#081316',
+                color: '#ffd37a',
+                wordBreak: 'break-word',
+                fontSize: '0.8rem',
+                maxWidth: '420px',
+              }}
+            >
+              {opReturnText || '—'}
+            </div>
+          </details>
+        </div>
+      </div>
+    </article>
+  );
+}
+
 function TxLink({ txid }) {
   return (
     <Link to={`/tx/${txid}`} style={{ color: '#00eaff' }}>
@@ -277,39 +824,51 @@ function AddressLink({ address }) {
   );
 }
 
-function TokenLink({ tokenId }) {
-  return (
-    <Link to={`/token/${tokenId}`} style={{ color: '#00eaff' }}>
-      {shortHex(tokenId, 18, 14)}
-    </Link>
-  );
-}
-
-function TxList({ txs = [] }) {
+function TxTable({ txs = [] }) {
   if (!txs.length) return <Box>No hay transacciones.</Box>;
 
   return (
-    <div style={{ display: 'grid', gap: '12px' }}>
-      {txs.map((tx) => (
-        <Box key={tx.txid}>
-          <div style={{ marginBottom: '8px' }}>
-            <strong>TXID:</strong> <TxLink txid={tx.txid} />
-          </div>
-          <div style={{ color: '#b8fdff' }}>
-            Inputs: {formatNumber(tx.inputs?.length || 0)} · Outputs: {formatNumber(tx.outputs?.length || 0)}
-          </div>
-          <div style={{ color: '#b8fdff', marginTop: '6px' }}>
-            {tx.block?.height !== undefined ? (
-              <>Bloque: <BlockLink hashOrHeight={tx.block.height}>{tx.block.height}</BlockLink></>
-            ) : (
-              'Mempool'
-            )}
-          </div>
-        </Box>
-      ))}
-    </div>
+    <Box style={{ overflowX: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr>
+            <th style={thStyle}>TXID</th>
+            <th style={thStyle}>Inputs</th>
+            <th style={thStyle}>Outputs</th>
+            <th style={thStyle}>Bloque</th>
+          </tr>
+        </thead>
+        <tbody>
+          {txs.map((tx) => (
+            <tr key={tx.txid}>
+              <td style={tdStyle}><TxLink txid={tx.txid} /></td>
+              <td style={tdStyle}>{formatNumber(tx.inputs?.length || 0)}</td>
+              <td style={tdStyle}>{formatNumber(tx.outputs?.length || 0)}</td>
+              <td style={tdStyle}>
+                {tx.block?.height !== undefined ? (
+                  <BlockLink hashOrHeight={tx.block.height}>{tx.block.height}</BlockLink>
+                ) : 'Mempool'}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Box>
   );
 }
+
+const thStyle = {
+  textAlign: 'left',
+  padding: '10px',
+  borderBottom: '1px solid #00eaff',
+  color: '#8ff7ff',
+};
+
+const tdStyle = {
+  padding: '10px',
+  borderBottom: '1px solid #123',
+  verticalAlign: 'top',
+};
 
 function OutputsTable({ outputs = [] }) {
   if (!outputs.length) return <Box>No hay salidas.</Box>;
@@ -319,7 +878,7 @@ function OutputsTable({ outputs = [] }) {
       {outputs.map((output, idx) => {
         const addr = outputScriptToAddress(output.outputScript);
         const opReturn = isOpReturn(output.outputScript);
-        const tokenEntries = output.token ? [output.token] : [];
+        const opReturnText = extractOpReturnText(output.outputScript);
 
         return (
           <Box key={idx}>
@@ -336,32 +895,19 @@ function OutputsTable({ outputs = [] }) {
               <div style={{ marginTop: '8px', color: '#ffd37a' }}>
                 OP_RETURN detectado
                 <div style={{ marginTop: '6px', wordBreak: 'break-word' }}>
-                  {decodeOpReturnHex(output.outputScript)}
+                  {opReturnText}
                 </div>
+                {isXolosLinajeRecord(opReturnText) && (
+                  <div style={{ marginTop: '8px', color: '#9dff9d' }}>
+                    🐾 Registro oficial de linaje detectado
+                  </div>
+                )}
               </div>
             )}
 
             {!addr && !opReturn && (
               <div style={{ marginTop: '8px', color: '#8ff7ff', wordBreak: 'break-word' }}>
                 Script: {output.outputScript || '—'}
-              </div>
-            )}
-
-            {tokenEntries.length > 0 && (
-              <div style={{ marginTop: '10px' }}>
-                <div>Token:</div>
-                <pre
-                  style={{
-                    background: '#111',
-                    color: '#d7fdff',
-                    padding: '10px',
-                    overflowX: 'auto',
-                    whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-word',
-                  }}
-                >
-                  {safeStringify(tokenEntries)}
-                </pre>
               </div>
             )}
           </Box>
@@ -390,12 +936,6 @@ function InputsTable({ inputs = [] }) {
             <div style={{ marginTop: '8px', color: '#b8fdff' }}>Coinbase / sin prevOut</div>
           )}
 
-          {input.outputScript && (
-            <div style={{ marginTop: '8px', wordBreak: 'break-word', color: '#8ff7ff' }}>
-              Output script origen: {input.outputScript}
-            </div>
-          )}
-
           {input.sats !== undefined && (
             <div style={{ marginTop: '8px' }}>
               Valor origen: {satsToXec(input.sats)}
@@ -411,16 +951,496 @@ function HomePage() {
   return (
     <Shell>
       <SearchBar />
-      <div style={{ marginTop: '28px', color: '#b8fdff' }}>
-        <p>Rutas habilitadas:</p>
-        <ul>
-          <li><code>/block/:height</code></li>
-          <li><code>/tx/:txid</code></li>
-          <li><code>/address/:address</code></li>
-          <li><code>/token/:tokenId</code></li>
-          <li><code>/search/:hash</code></li>
-        </ul>
+      <StatGrid
+        items={[
+          { label: 'Ruta Explorer', value: <Link to="/explorer" style={{ color: '#00eaff' }}>/explorer</Link> },
+          { label: 'Ruta Linaje', value: <Link to="/linaje" style={{ color: '#00eaff' }}>/linaje</Link> },
+          { label: 'Bloque ejemplo', value: <Link to="/block/9000" style={{ color: '#00eaff' }}>/block/9000</Link> },
+        ]}
+      />
+    </Shell>
+  );
+}
+
+function ExplorerPage() {
+  const [state, setState] = React.useState({
+    loading: true,
+    error: '',
+    blocks: [],
+    txs: [],
+  });
+
+  React.useEffect(() => {
+    let mounted = true;
+
+    async function load() {
+      try {
+        setState({ loading: true, error: '', blocks: [], txs: [] });
+
+        const tip = await chronik.blockchainInfo();
+        const tipHeight = tip.tipHeight;
+
+        const heights = [];
+        for (let h = tipHeight; h > Math.max(0, tipHeight - 9); h--) {
+          heights.push(h);
+        }
+
+        const blockResults = await Promise.all(
+          heights.map((h) => chronik.block(h.toString()))
+        );
+
+        const txResults = await Promise.all(
+          heights.slice(0, 5).map((h) => chronik.blockTxs(h.toString(), 0, 5))
+        );
+
+        const flatTxs = txResults.flatMap((r) => r.txs || []);
+
+        if (mounted) {
+          setState({
+            loading: false,
+            error: '',
+            blocks: blockResults,
+            txs: flatTxs,
+          });
+        }
+      } catch (err) {
+        if (mounted) {
+          setState({
+            loading: false,
+            error: err?.message || 'No se pudo cargar el explorer.',
+            blocks: [],
+            txs: [],
+          });
+        }
+      }
+    }
+
+    load();
+    return () => { mounted = false; };
+  }, []);
+
+  return (
+    <Shell>
+      <SearchBar />
+      {state.loading && <LoadingBox text="Cargando dashboard del explorador..." />}
+      {state.error && <ErrorBox error={state.error} />}
+
+      {!state.loading && !state.error && (
+        <>
+          <SectionTitle>Últimos bloques</SectionTitle>
+          <Box style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={thStyle}>Altura</th>
+                  <th style={thStyle}>Hash</th>
+                  <th style={thStyle}>Fecha</th>
+                  <th style={thStyle}>TXs</th>
+                  <th style={thStyle}>Tamaño</th>
+                </tr>
+              </thead>
+              <tbody>
+                {state.blocks.map((b) => {
+                  const info = b.blockInfo;
+                  return (
+                    <tr key={info.hash}>
+                      <td style={tdStyle}>
+                        <BlockLink hashOrHeight={info.height}>{info.height}</BlockLink>
+                      </td>
+                      <td style={tdStyle}>{shortHex(info.hash, 18, 14)}</td>
+                      <td style={tdStyle}>{unixToText(info.timestamp)}</td>
+                      <td style={tdStyle}>{formatNumber(info.numTxs)}</td>
+                      <td style={tdStyle}>{formatNumber(info.blockSize)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </Box>
+
+          <SectionTitle>Últimas transacciones</SectionTitle>
+          <TxTable txs={state.txs} />
+        </>
+      )}
+    </Shell>
+  );
+}
+
+function LinajePage() {
+  const [state, setState] = React.useState({
+    loading: true,
+    error: '',
+    matches: [],
+  });
+  const [query, setQuery] = React.useState('');
+  const [sexoFilter, setSexoFilter] = React.useState('todos');
+  const [variedadFilter, setVariedadFilter] = React.useState('todas');
+  const [onlyIndexed, setOnlyIndexed] = React.useState(false);
+
+  React.useEffect(() => {
+    let mounted = true;
+
+    async function load() {
+      try {
+        setState({ loading: true, error: '', matches: [] });
+        const matches = await fetchRecentLinajeMatches(20, 25);
+
+        if (mounted) {
+          setState({ loading: false, error: '', matches });
+        }
+      } catch (err) {
+        if (mounted) {
+          setState({
+            loading: false,
+            error: err?.message || 'No se pudo cargar la vista de linaje.',
+            matches: [],
+          });
+        }
+      }
+    }
+
+    load();
+    return () => { mounted = false; };
+  }, []);
+
+  const records = React.useMemo(() => {
+    const flattened = state.matches.flatMap(({ tx, opReturns }) =>
+      opReturns.map((op, i) => {
+        const enriched = enrichLinajeRecord(op, tx.txid);
+        const localMeta = enriched.editorialMeta || resolveLinajeMeta({ slug: enriched.slug, txid: tx.txid });
+        const sexoValue = localMeta?.sexo || enriched.parsed?.SEXO || '';
+        const variedadValue = localMeta?.variedad || enriched.parsed?.VAR || '';
+        const tags = Array.isArray(localMeta?.tags) ? localMeta.tags.join(' ') : '';
+        const searchText = [
+          enriched.slug,
+          tx.txid,
+          localMeta?.title,
+          localMeta?.nombreCompleto,
+          localMeta?.subtitle,
+          localMeta?.color,
+          localMeta?.variedad,
+          localMeta?.sexo,
+          enriched.parsed?.NOMBRE,
+          enriched.parsed?.COLOR,
+          enriched.parsed?.VAR,
+          enriched.parsed?.SEXO,
+          tags,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+
+        return {
+          id: `${tx.txid}-${i}`,
+          tx,
+          index: i,
+          parsed: enriched.parsed,
+          slug: enriched.slug,
+          indexedTxid: enriched.indexedTxid,
+          editorialMeta: localMeta,
+          opReturnText: enriched.text,
+          sexoFilter: normalizeSexoFilterValue(sexoValue),
+          variedadFilter: (variedadValue || '').toString().trim().toLowerCase(),
+          hasIndexedSlug: isHex64(enriched.indexedTxid),
+          searchText,
+        };
+      })
+    );
+
+    return flattened.sort((a, b) => {
+      const heightA = a.tx?.block?.height ?? -1;
+      const heightB = b.tx?.block?.height ?? -1;
+      if (heightA !== heightB) return heightB - heightA;
+      return a.index - b.index;
+    });
+  }, [state.matches]);
+
+  const variedadOptions = React.useMemo(() => {
+    const raw = Array.from(new Set(records.map((record) => record.variedadFilter).filter(Boolean))).sort();
+    return raw;
+  }, [records]);
+
+  const filteredRecords = React.useMemo(() => {
+    const q = query.trim().toLowerCase();
+
+    return records.filter((record) => {
+      if (q && !record.searchText.includes(q)) return false;
+      if (sexoFilter !== 'todos' && record.sexoFilter !== sexoFilter) return false;
+      if (variedadFilter !== 'todas' && record.variedadFilter !== variedadFilter) return false;
+      if (onlyIndexed && !record.hasIndexedSlug) return false;
+      return true;
+    });
+  }, [records, query, sexoFilter, variedadFilter, onlyIndexed]);
+
+  return (
+    <Shell>
+      <SearchBar />
+      <SectionTitle>Archivo del Linaje Vivo</SectionTitle>
+
+      {state.loading && <LoadingBox text="Buscando inscripciones OP_RETURN..." />}
+      {state.error && <ErrorBox error={state.error} />}
+
+      {!state.loading && !state.error && (
+        <>
+          {state.matches.length === 0 ? (
+            <Box>No se encontraron registros oficiales de linaje en el rango escaneado.</Box>
+          ) : (
+            <>
+              <Box style={{ marginBottom: '14px' }}>
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: '10px',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                    alignItems: 'end',
+                  }}
+                >
+                  <label style={{ display: 'grid', gap: '6px', color: '#8ff7ff', fontSize: '0.85rem' }}>
+                    Buscar
+                    <input
+                      type="text"
+                      placeholder="Nombre, slug, txid, color..."
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      style={{
+                        background: '#081316',
+                        border: '1px solid #1c515b',
+                        color: '#d6ffff',
+                        padding: '8px 10px',
+                        fontFamily: 'monospace',
+                      }}
+                    />
+                  </label>
+
+                  <label style={{ display: 'grid', gap: '6px', color: '#8ff7ff', fontSize: '0.85rem' }}>
+                    Sexo
+                    <select
+                      value={sexoFilter}
+                      onChange={(e) => setSexoFilter(e.target.value)}
+                      style={{
+                        background: '#081316',
+                        border: '1px solid #1c515b',
+                        color: '#d6ffff',
+                        padding: '8px 10px',
+                        fontFamily: 'monospace',
+                      }}
+                    >
+                      <option value="todos">Todos</option>
+                      <option value="hembra">Hembra</option>
+                      <option value="macho">Macho</option>
+                      <option value="desconocido">Desconocido</option>
+                    </select>
+                  </label>
+
+                  <label style={{ display: 'grid', gap: '6px', color: '#8ff7ff', fontSize: '0.85rem' }}>
+                    Variedad
+                    <select
+                      value={variedadFilter}
+                      onChange={(e) => setVariedadFilter(e.target.value)}
+                      style={{
+                        background: '#081316',
+                        border: '1px solid #1c515b',
+                        color: '#d6ffff',
+                        padding: '8px 10px',
+                        fontFamily: 'monospace',
+                      }}
+                    >
+                      <option value="todas">Todas</option>
+                      {variedadOptions.map((option) => (
+                        <option key={option} value={option}>{option}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#8ff7ff', fontSize: '0.85rem' }}>
+                    <input
+                      type="checkbox"
+                      checked={onlyIndexed}
+                      onChange={(e) => setOnlyIndexed(e.target.checked)}
+                    />
+                    Solo con vínculo en índice local
+                  </label>
+                </div>
+
+                <div style={{ marginTop: '10px', color: '#8ff7ff' }}>
+                  Mostrando <strong>{filteredRecords.length}</strong> de <strong>{records.length}</strong> registros
+                </div>
+              </Box>
+
+              {filteredRecords.length === 0 ? (
+                <Box>No hay registros que coincidan con los filtros aplicados.</Box>
+              ) : (
+                <div style={{ display: 'grid', gap: '14px', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
+                  {filteredRecords.map((record) => (
+                    <LinajeGalleryCard key={record.id} record={record} />
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
+    </Shell>
+  );
+}
+
+function LinajeRecordPage() {
+  const { txidOrSlug } = useParams();
+  const [state, setState] = React.useState({
+    loading: true,
+    error: '',
+    tx: null,
+    records: [],
+    resolvedBy: '',
+  });
+
+  React.useEffect(() => {
+    let mounted = true;
+
+    async function load() {
+      try {
+        setState({ loading: true, error: '', tx: null, records: [], resolvedBy: '' });
+        const value = (txidOrSlug || '').trim();
+
+        if (!value) {
+          throw new Error('Falta identificar un txid o slug de linaje.');
+        }
+
+        if (isHex64(value)) {
+          const tx = await chronik.tx(value);
+          const records = extractLinajeRecordsFromTx(tx);
+
+          if (!records.length) {
+            throw new Error('La transacción existe, pero no contiene un registro oficial de linaje XOLO|RAMIREZ.');
+          }
+
+          if (mounted) {
+            setState({ loading: false, error: '', tx, records, resolvedBy: 'txid' });
+          }
+          return;
+        }
+
+        const slug = slugify(value);
+        const indexedTxid = findLinajeTxidBySlug(slug);
+
+        if (isHex64(indexedTxid)) {
+          const tx = await chronik.tx(indexedTxid);
+          const records = extractLinajeRecordsFromTx(tx);
+          const matchedRecord = records.find((record) => record.slug === slug);
+
+          if (matchedRecord) {
+            if (mounted) {
+              setState({
+                loading: false,
+                error: '',
+                tx,
+                records: [matchedRecord],
+                resolvedBy: 'slug-index',
+              });
+            }
+            return;
+          }
+        }
+
+        const matches = await fetchRecentLinajeMatches(250, 25);
+        const flattened = matches.flatMap(({ tx, opReturns }) =>
+          opReturns.map((record) => ({ tx, record }))
+        );
+        const found = flattened.find(({ record }) => record.slug === slug);
+
+        if (!found) {
+          throw new Error(`No se encontró un registro de linaje para el slug "${value}" en el índice local ni en el rango escaneado.`);
+        }
+
+        if (mounted) {
+          setState({
+            loading: false,
+            error: '',
+            tx: found.tx,
+            records: [found.record],
+            resolvedBy: 'slug-scan',
+          });
+        }
+      } catch (err) {
+        if (mounted) {
+          setState({
+            loading: false,
+            error: err?.message || 'No se pudo cargar el registro de linaje.',
+            tx: null,
+            records: [],
+            resolvedBy: '',
+          });
+        }
+      }
+    }
+
+    load();
+    return () => { mounted = false; };
+  }, [txidOrSlug]);
+
+  return (
+    <Shell>
+      <SearchBar />
+      <SectionTitle>Registro Individual del Linaje Vivo</SectionTitle>
+      <div style={{ marginTop: '6px' }}>
+        <Link to="/linaje" style={{ color: '#00eaff' }}>
+          ← Volver al archivo de linaje
+        </Link>
       </div>
+
+      {state.loading && <LoadingBox text="Cargando registro individual..." />}
+      {state.error && <ErrorBox error={state.error} />}
+
+      {!state.loading && !state.error && state.tx && (
+        <>
+          {/*
+            La vista individual unifica:
+            1) OP_RETURN parseado (records),
+            2) slug/índice local,
+            3) metadata editorial local.
+          */}
+          {(() => {
+            const primary = state.records[0] || null;
+            const enriched = primary ? enrichLinajeRecord(primary, state.tx.txid) : null;
+            return (
+          <StatGrid
+            items={[
+              { label: 'TXID', value: state.tx.txid },
+              { label: 'Resuelto por', value: state.resolvedBy || '—' },
+              { label: 'Slug narrativo', value: enriched?.slug || '—' },
+              { label: 'Índice local', value: isHex64(enriched?.indexedTxid || '') ? 'Vinculado' : 'Sin vínculo' },
+              { label: 'Capa editorial', value: enriched?.editorialMeta ? 'Disponible' : 'No encontrada' },
+              {
+                label: 'Bloque',
+                value: state.tx.block?.height !== undefined ? (
+                  <BlockLink hashOrHeight={state.tx.block.height}>{state.tx.block.height}</BlockLink>
+                ) : 'Mempool',
+              },
+              { label: 'Registros oficiales en TX', value: formatNumber(state.records.length) },
+            ]}
+          />
+            );
+          })()}
+
+          <div style={{ marginTop: '14px', display: 'grid', gap: '14px' }}>
+            {state.records.map((record, i) => {
+              const enriched = enrichLinajeRecord(record, state.tx.txid);
+              return (
+                <LinajeCard
+                  key={`${state.tx.txid}-${i}`}
+                  tx={state.tx}
+                  opReturnText={enriched.text}
+                  parsed={enriched.parsed}
+                  slug={enriched.slug}
+                  indexedTxid={enriched.indexedTxid}
+                  editorialMeta={enriched.editorialMeta}
+                  showDetailLink={false}
+                />
+              );
+            })}
+          </div>
+        </>
+      )}
     </Shell>
   );
 }
@@ -444,9 +1464,7 @@ function BlockPage() {
       }
     }
     load();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [height]);
 
   const info = state.data?.block?.blockInfo;
@@ -471,18 +1489,19 @@ function BlockPage() {
               { label: 'TXs', value: formatNumber(info?.numTxs) },
               { label: 'Tamaño', value: formatNumber(info?.blockSize) },
               { label: 'Bits', value: formatNumber(info?.nBits) },
+              {
+                label: 'Bloque anterior',
+                value: info?.height > 0 ? <BlockLink hashOrHeight={info.height - 1}>{info.height - 1}</BlockLink> : '—',
+              },
+              {
+                label: 'Bloque siguiente',
+                value: <BlockLink hashOrHeight={info.height + 1}>{info.height + 1}</BlockLink>,
+              },
             ]}
           />
 
           <SectionTitle>Transacciones del bloque</SectionTitle>
-          <TxList txs={state.data?.txs?.txs || []} />
-
-          <SectionTitle>JSON crudo</SectionTitle>
-          <Box style={{ overflowX: 'auto' }}>
-            <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#d7fdff' }}>
-              {safeStringify(state.data)}
-            </pre>
-          </Box>
+          <TxTable txs={state.data?.txs?.txs || []} />
         </>
       )}
     </Shell>
@@ -505,9 +1524,7 @@ function TxPage() {
       }
     }
     load();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [txid]);
 
   const tx = state.data;
@@ -544,24 +1561,6 @@ function TxPage() {
 
           <SectionTitle>Outputs</SectionTitle>
           <OutputsTable outputs={tx.outputs || []} />
-
-          {tx.tokenEntries && Object.keys(tx.tokenEntries).length > 0 && (
-            <>
-              <SectionTitle>Token entries</SectionTitle>
-              <Box style={{ overflowX: 'auto' }}>
-                <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#d7fdff' }}>
-                  {safeStringify(tx.tokenEntries)}
-                </pre>
-              </Box>
-            </>
-          )}
-
-          <SectionTitle>JSON crudo</SectionTitle>
-          <Box style={{ overflowX: 'auto' }}>
-            <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#d7fdff' }}>
-              {safeStringify(tx)}
-            </pre>
-          </Box>
         </>
       )}
     </Shell>
@@ -588,14 +1587,11 @@ function AddressPage() {
       }
     }
     load();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [decodedAddress]);
 
   const utxos = state.data?.utxos?.utxos || [];
   const txs = state.data?.history?.txs || [];
-
   const totalSats = utxos.reduce((acc, u) => acc + Number(u.sats || 0), 0);
 
   return (
@@ -619,48 +1615,8 @@ function AddressPage() {
             ]}
           />
 
-          <SectionTitle>UTXOs</SectionTitle>
-          {utxos.length ? (
-            <div style={{ display: 'grid', gap: '12px' }}>
-              {utxos.map((utxo, idx) => (
-                <Box key={`${utxo.outpoint?.txid}-${utxo.outpoint?.outIdx}-${idx}`}>
-                  <div>
-                    TX: <TxLink txid={utxo.outpoint?.txid} />
-                  </div>
-                  <div style={{ marginTop: '6px' }}>OutIdx: {utxo.outpoint?.outIdx}</div>
-                  <div style={{ marginTop: '6px' }}>Valor: {satsToXec(utxo.sats)}</div>
-                  {utxo.token && (
-                    <div style={{ marginTop: '10px' }}>
-                      <pre
-                        style={{
-                          background: '#111',
-                          color: '#d7fdff',
-                          padding: '10px',
-                          overflowX: 'auto',
-                          whiteSpace: 'pre-wrap',
-                          wordBreak: 'break-word',
-                        }}
-                      >
-                        {safeStringify(utxo.token)}
-                      </pre>
-                    </div>
-                  )}
-                </Box>
-              ))}
-            </div>
-          ) : (
-            <Box>No hay UTXOs.</Box>
-          )}
-
           <SectionTitle>Historial reciente</SectionTitle>
-          <TxList txs={txs} />
-
-          <SectionTitle>JSON crudo</SectionTitle>
-          <Box style={{ overflowX: 'auto' }}>
-            <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#d7fdff' }}>
-              {safeStringify(state.data)}
-            </pre>
-          </Box>
+          <TxTable txs={txs} />
         </>
       )}
     </Shell>
@@ -683,9 +1639,7 @@ function TokenPage() {
       }
     }
     load();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [tokenId]);
 
   const token = state.data;
@@ -701,24 +1655,15 @@ function TokenPage() {
       {state.error && <ErrorBox error={state.error} />}
 
       {token && (
-        <>
-          <StatGrid
-            items={[
-              { label: 'Token ID', value: token.tokenId || tokenId },
-              { label: 'Ticker', value: token.tokenTicker || '—' },
-              { label: 'Nombre', value: token.tokenName || '—' },
-              { label: 'Decimales', value: token.decimals ?? '—' },
-              { label: 'URL', value: token.url || '—' },
-            ]}
-          />
-
-          <SectionTitle>JSON crudo</SectionTitle>
-          <Box style={{ overflowX: 'auto' }}>
-            <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#d7fdff' }}>
-              {safeStringify(token)}
-            </pre>
-          </Box>
-        </>
+        <StatGrid
+          items={[
+            { label: 'Token ID', value: token.tokenId || tokenId },
+            { label: 'Ticker', value: token.tokenTicker || '—' },
+            { label: 'Nombre', value: token.tokenName || '—' },
+            { label: 'Decimales', value: token.decimals ?? '—' },
+            { label: 'URL', value: token.url || '—' },
+          ]}
+        />
       )}
     </Shell>
   );
@@ -754,9 +1699,7 @@ function SearchHashPage() {
       }
     }
     resolveHash();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [hash, navigate]);
 
   return (
@@ -782,6 +1725,9 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<HomePage />} />
+        <Route path="/explorer" element={<ExplorerPage />} />
+        <Route path="/linaje" element={<LinajePage />} />
+        <Route path="/linaje/:txidOrSlug" element={<LinajeRecordPage />} />
         <Route path="/block/:height" element={<BlockPage />} />
         <Route path="/tx/:txid" element={<TxPage />} />
         <Route path="/address/:address" element={<AddressPage />} />

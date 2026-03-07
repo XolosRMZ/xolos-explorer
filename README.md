@@ -1,16 +1,65 @@
-# React + Vite
+# Xolos Explorer
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Explorador web para la infraestructura de **xolosArmy Network**, construido con **React + Vite**, orientado a visualizar información pública de la red eCash/Chronik con una experiencia clara, rápida y expandible.
 
-Currently, two official plugins are available:
+## Visión
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+**Xolos Explorer** no busca ser solo un explorador técnico más.  
+La meta es construir una interfaz pública que permita consultar y navegar datos de la red de forma sencilla, con una identidad propia alineada a la visión de **xolosArmy Network**.
 
-## React Compiler
+Este proyecto servirá como base para:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- Exploración de bloques
+- Exploración de transacciones
+- Exploración de direcciones
+- Búsqueda por hash o altura
+- Integración con Chronik
+- Visualización narrativa y cultural para proyectos futuros de registro público e identidad digital
 
-## Expanding the ESLint configuration
+---
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Stack
+
+- **React**
+- **Vite**
+- **JavaScript**
+- **CSS**
+- **Chronik API** (objetivo de integración principal)
+
+---
+
+## Estado actual
+
+Proyecto en fase inicial.
+
+Actualmente este repositorio funciona como la base del frontend y evolucionará hacia un explorador completo con rutas navegables y conexión a la infraestructura soberana de xolosArmy Network.
+
+Próximas etapas:
+
+- [ ] Integrar `react-router-dom`
+- [ ] Crear página principal del explorador
+- [ ] Vista de bloque
+- [ ] Vista de transacción
+- [ ] Vista de dirección
+- [ ] Barra de búsqueda global
+- [ ] Manejo de errores y estados de carga
+- [ ] Integración directa con Chronik
+- [ ] Mejorar identidad visual xolosArmy Network
+
+---
+
+## Estructura del proyecto
+
+```bash
+xolos-explorer/
+├── public/
+├── src/
+│   ├── assets/
+│   ├── App.jsx
+│   ├── App.css
+│   ├── index.css
+│   └── main.jsx
+├── index.html
+├── package.json
+├── vite.config.js
+└── README.md

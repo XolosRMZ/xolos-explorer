@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { BrowserRouter, Link, Routes, Route, useNavigate, useParams } from 'react-router-dom';
 import { ChronikClient } from 'chronik-client';
+import * as ecashaddr from 'ecashaddrjs';
 
 const CHRONIK_URL = 'https://chronik.xolosarmy.xyz';
 const chronik = new ChronikClient(CHRONIK_URL);
@@ -33,6 +34,72 @@ function unixToText(ts) {
   return new Date(ts * 1000).toLocaleString('es-MX');
 }
 
+function formatNumber(value) {
+  if (value === undefined || value === null || value === '') return '—';
+  return new Intl.NumberFormat('es-MX').format(Number(value));
+}
+
+function satsToXec(sats) {
+  if (sats === undefined || sats === null) return '—';
+  const n = Number(sats) / 100;
+  return `${new Intl.NumberFormat('es-MX', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(n)} XEC`;
+}
+
+function outputScriptToAddress(outputScript) {
+  try {
+    if (!outputScript || typeof outputScript !== 'string') return null;
+
+    // P2PKH: 76a914{20-byte-hash}88ac
+    if (outputScript.startsWith('76a914') && outputScript.endsWith('88ac') && outputScript.length === 50) {
+      const hash = outputScript.slice(6, -4);
+      return ecashaddr.encodeCashAddress('ecash', 'p2pkh', hash);
+    }
+
+    // P2SH: a914{20-byte-hash}87
+    if (outputScript.startsWith('a914') && outputScript.endsWith('87') && outputScript.length === 46) {
+      const hash = outputScript.slice(4, -2);
+      return ecashaddr.encodeCashAddress('ecash', 'p2sh', hash);
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function isOpReturn(outputScript) {
+  return typeof outputScript === 'string' && outputScript.startsWith('6a');
+}
+
+function decodeOpReturnHex(hex) {
+  if (!hex || !hex.startsWith('6a')) return null;
+  try {
+    // decodificación simple para el MVP
+    const body = hex.slice(2);
+    return body;
+  } catch {
+    return null;
+  }
+}
+
+function Box({ children, style = {} }) {
+  return (
+    <div
+      style={{
+        border: '1px solid #00eaff',
+        padding: '14px',
+        background: '#0b0b0b',
+        ...style,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
 function Shell({ children }) {
   return (
     <div
@@ -44,24 +111,17 @@ function Shell({ children }) {
         fontFamily: 'monospace',
       }}
     >
-      <div style={{ maxWidth: '1100px', margin: '0 auto' }}>
+      <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
         <div style={{ marginBottom: '20px' }}>
           <Link to="/" style={{ color: '#00eaff', textDecoration: 'none' }}>
             <h1 style={{ fontSize: '3rem', marginBottom: '10px' }}>XOLOS EXPLORER</h1>
           </Link>
           <p style={{ color: '#8ff7ff', marginBottom: '20px' }}>
-            Explorador mínimo conectado a tu Chronik soberano
+            Explorador mínimo avanzado conectado a tu Chronik soberano
           </p>
-          <div
-            style={{
-              border: '1px solid #00eaff',
-              padding: '14px',
-              marginBottom: '20px',
-              background: '#0b0b0b',
-            }}
-          >
+          <Box style={{ marginBottom: '20px' }}>
             <div><strong>Endpoint:</strong> {CHRONIK_URL}</div>
-          </div>
+          </Box>
         </div>
         {children}
       </div>
@@ -149,30 +209,8 @@ function SearchBar() {
   );
 }
 
-function HomePage() {
-  return (
-    <Shell>
-      <SearchBar />
-      <div style={{ marginTop: '28px', color: '#b8fdff' }}>
-        <p>Rutas habilitadas:</p>
-        <ul>
-          <li><code>/block/:height</code></li>
-          <li><code>/tx/:txid</code></li>
-          <li><code>/address/:address</code></li>
-          <li><code>/token/:tokenId</code></li>
-          <li><code>/search/:hash</code></li>
-        </ul>
-      </div>
-    </Shell>
-  );
-}
-
 function LoadingBox({ text = 'Olfateando la blockchain...' }) {
-  return (
-    <div style={{ marginTop: '20px', border: '1px solid #00eaff', padding: '14px', background: '#0b0b0b' }}>
-      {text}
-    </div>
-  );
+  return <Box style={{ marginTop: '20px' }}>{text}</Box>;
 }
 
 function ErrorBox({ error }) {
@@ -191,24 +229,199 @@ function ErrorBox({ error }) {
   );
 }
 
-function ResultBox({ title, data }) {
+function StatGrid({ items }) {
   return (
-    <div style={{ marginTop: '24px' }}>
-      <h2 style={{ marginBottom: '10px' }}>{title}</h2>
-      <pre
-        style={{
-          background: '#0b0b0b',
-          border: '1px solid #00eaff',
-          padding: '16px',
-          overflowX: 'auto',
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-          color: '#d7fdff',
-        }}
-      >
-        {safeStringify(data)}
-      </pre>
+    <div
+      style={{
+        marginTop: '24px',
+        display: 'grid',
+        gap: '12px',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+      }}
+    >
+      {items.map((item, i) => (
+        <Box key={i}>
+          <div style={{ color: '#8ff7ff', marginBottom: '8px' }}>{item.label}</div>
+          <strong style={{ wordBreak: 'break-word' }}>{item.value}</strong>
+        </Box>
+      ))}
     </div>
+  );
+}
+
+function SectionTitle({ children }) {
+  return <h2 style={{ marginTop: '28px', marginBottom: '12px' }}>{children}</h2>;
+}
+
+function TxLink({ txid }) {
+  return (
+    <Link to={`/tx/${txid}`} style={{ color: '#00eaff' }}>
+      {shortHex(txid, 18, 14)}
+    </Link>
+  );
+}
+
+function BlockLink({ hashOrHeight, children }) {
+  return (
+    <Link to={`/block/${hashOrHeight}`} style={{ color: '#00eaff' }}>
+      {children || hashOrHeight}
+    </Link>
+  );
+}
+
+function AddressLink({ address }) {
+  return (
+    <Link to={`/address/${encodeURIComponent(address)}`} style={{ color: '#00eaff', wordBreak: 'break-word' }}>
+      {address}
+    </Link>
+  );
+}
+
+function TokenLink({ tokenId }) {
+  return (
+    <Link to={`/token/${tokenId}`} style={{ color: '#00eaff' }}>
+      {shortHex(tokenId, 18, 14)}
+    </Link>
+  );
+}
+
+function TxList({ txs = [] }) {
+  if (!txs.length) return <Box>No hay transacciones.</Box>;
+
+  return (
+    <div style={{ display: 'grid', gap: '12px' }}>
+      {txs.map((tx) => (
+        <Box key={tx.txid}>
+          <div style={{ marginBottom: '8px' }}>
+            <strong>TXID:</strong> <TxLink txid={tx.txid} />
+          </div>
+          <div style={{ color: '#b8fdff' }}>
+            Inputs: {formatNumber(tx.inputs?.length || 0)} · Outputs: {formatNumber(tx.outputs?.length || 0)}
+          </div>
+          <div style={{ color: '#b8fdff', marginTop: '6px' }}>
+            {tx.block?.height !== undefined ? (
+              <>Bloque: <BlockLink hashOrHeight={tx.block.height}>{tx.block.height}</BlockLink></>
+            ) : (
+              'Mempool'
+            )}
+          </div>
+        </Box>
+      ))}
+    </div>
+  );
+}
+
+function OutputsTable({ outputs = [] }) {
+  if (!outputs.length) return <Box>No hay salidas.</Box>;
+
+  return (
+    <div style={{ display: 'grid', gap: '12px' }}>
+      {outputs.map((output, idx) => {
+        const addr = outputScriptToAddress(output.outputScript);
+        const opReturn = isOpReturn(output.outputScript);
+        const tokenEntries = output.token ? [output.token] : [];
+
+        return (
+          <Box key={idx}>
+            <div><strong>Output #{idx}</strong></div>
+            <div style={{ marginTop: '8px' }}>Valor: {satsToXec(output.sats)}</div>
+
+            {addr && (
+              <div style={{ marginTop: '8px' }}>
+                Dirección: <AddressLink address={addr} />
+              </div>
+            )}
+
+            {opReturn && (
+              <div style={{ marginTop: '8px', color: '#ffd37a' }}>
+                OP_RETURN detectado
+                <div style={{ marginTop: '6px', wordBreak: 'break-word' }}>
+                  {decodeOpReturnHex(output.outputScript)}
+                </div>
+              </div>
+            )}
+
+            {!addr && !opReturn && (
+              <div style={{ marginTop: '8px', color: '#8ff7ff', wordBreak: 'break-word' }}>
+                Script: {output.outputScript || '—'}
+              </div>
+            )}
+
+            {tokenEntries.length > 0 && (
+              <div style={{ marginTop: '10px' }}>
+                <div>Token:</div>
+                <pre
+                  style={{
+                    background: '#111',
+                    color: '#d7fdff',
+                    padding: '10px',
+                    overflowX: 'auto',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                  }}
+                >
+                  {safeStringify(tokenEntries)}
+                </pre>
+              </div>
+            )}
+          </Box>
+        );
+      })}
+    </div>
+  );
+}
+
+function InputsTable({ inputs = [] }) {
+  if (!inputs.length) return <Box>No hay inputs.</Box>;
+
+  return (
+    <div style={{ display: 'grid', gap: '12px' }}>
+      {inputs.map((input, idx) => (
+        <Box key={idx}>
+          <div><strong>Input #{idx}</strong></div>
+          {input.prevOut?.txid ? (
+            <div style={{ marginTop: '8px' }}>
+              Prev TX: <TxLink txid={input.prevOut.txid} />
+              <div style={{ marginTop: '6px', color: '#b8fdff' }}>
+                Output index: {input.prevOut.outIdx}
+              </div>
+            </div>
+          ) : (
+            <div style={{ marginTop: '8px', color: '#b8fdff' }}>Coinbase / sin prevOut</div>
+          )}
+
+          {input.outputScript && (
+            <div style={{ marginTop: '8px', wordBreak: 'break-word', color: '#8ff7ff' }}>
+              Output script origen: {input.outputScript}
+            </div>
+          )}
+
+          {input.sats !== undefined && (
+            <div style={{ marginTop: '8px' }}>
+              Valor origen: {satsToXec(input.sats)}
+            </div>
+          )}
+        </Box>
+      ))}
+    </div>
+  );
+}
+
+function HomePage() {
+  return (
+    <Shell>
+      <SearchBar />
+      <div style={{ marginTop: '28px', color: '#b8fdff' }}>
+        <p>Rutas habilitadas:</p>
+        <ul>
+          <li><code>/block/:height</code></li>
+          <li><code>/tx/:txid</code></li>
+          <li><code>/address/:address</code></li>
+          <li><code>/token/:tokenId</code></li>
+          <li><code>/search/:hash</code></li>
+        </ul>
+      </div>
+    </Shell>
   );
 }
 
@@ -223,16 +436,20 @@ function BlockPage() {
         setState({ loading: true, error: '', data: null });
         const [block, txs] = await Promise.all([
           chronik.block(height),
-          chronik.blockTxs(height, 0, 10),
+          chronik.blockTxs(height, 0, 25),
         ]);
-        if (mounted) setState({ loading: false, error: '', data: { kind: 'block', block, txs } });
+        if (mounted) setState({ loading: false, error: '', data: { block, txs } });
       } catch (err) {
         if (mounted) setState({ loading: false, error: err?.message || 'No se pudo cargar el bloque.', data: null });
       }
     }
     load();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, [height]);
+
+  const info = state.data?.block?.blockInfo;
 
   return (
     <Shell>
@@ -240,29 +457,32 @@ function BlockPage() {
       <div style={{ marginTop: '20px', color: '#8ff7ff' }}>
         Viendo bloque: <strong>{height}</strong>
       </div>
+
       {state.loading && <LoadingBox />}
       {state.error && <ErrorBox error={state.error} />}
+
       {state.data && (
         <>
-          <div style={{ marginTop: '24px', display: 'grid', gap: '12px', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
-            <div style={{ border: '1px solid #00eaff', padding: '14px', background: '#0b0b0b' }}>
-              <div>Altura</div>
-              <strong>{state.data.block.blockInfo?.height}</strong>
-            </div>
-            <div style={{ border: '1px solid #00eaff', padding: '14px', background: '#0b0b0b' }}>
-              <div>Hash</div>
-              <strong>{shortHex(state.data.block.blockInfo?.hash)}</strong>
-            </div>
-            <div style={{ border: '1px solid #00eaff', padding: '14px', background: '#0b0b0b' }}>
-              <div>Fecha</div>
-              <strong>{unixToText(state.data.block.blockInfo?.timestamp)}</strong>
-            </div>
-            <div style={{ border: '1px solid #00eaff', padding: '14px', background: '#0b0b0b' }}>
-              <div>TXs</div>
-              <strong>{state.data.block.blockInfo?.numTxs}</strong>
-            </div>
-          </div>
-          <ResultBox title="Resultado: BLOCK" data={state.data} />
+          <StatGrid
+            items={[
+              { label: 'Altura', value: info?.height },
+              { label: 'Hash', value: info?.hash },
+              { label: 'Fecha', value: unixToText(info?.timestamp) },
+              { label: 'TXs', value: formatNumber(info?.numTxs) },
+              { label: 'Tamaño', value: formatNumber(info?.blockSize) },
+              { label: 'Bits', value: formatNumber(info?.nBits) },
+            ]}
+          />
+
+          <SectionTitle>Transacciones del bloque</SectionTitle>
+          <TxList txs={state.data?.txs?.txs || []} />
+
+          <SectionTitle>JSON crudo</SectionTitle>
+          <Box style={{ overflowX: 'auto' }}>
+            <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#d7fdff' }}>
+              {safeStringify(state.data)}
+            </pre>
+          </Box>
         </>
       )}
     </Shell>
@@ -279,14 +499,18 @@ function TxPage() {
       try {
         setState({ loading: true, error: '', data: null });
         const tx = await chronik.tx(txid);
-        if (mounted) setState({ loading: false, error: '', data: { kind: 'tx', tx } });
+        if (mounted) setState({ loading: false, error: '', data: tx });
       } catch (err) {
         if (mounted) setState({ loading: false, error: err?.message || 'No se pudo cargar la transacción.', data: null });
       }
     }
     load();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, [txid]);
+
+  const tx = state.data;
 
   return (
     <Shell>
@@ -294,9 +518,52 @@ function TxPage() {
       <div style={{ marginTop: '20px', color: '#8ff7ff' }}>
         Viendo transacción: <strong>{shortHex(txid, 20, 16)}</strong>
       </div>
+
       {state.loading && <LoadingBox />}
       {state.error && <ErrorBox error={state.error} />}
-      {state.data && <ResultBox title="Resultado: TX" data={state.data} />}
+
+      {tx && (
+        <>
+          <StatGrid
+            items={[
+              { label: 'TXID', value: tx.txid },
+              { label: 'Inputs', value: formatNumber(tx.inputs?.length || 0) },
+              { label: 'Outputs', value: formatNumber(tx.outputs?.length || 0) },
+              { label: 'Primera vez vista', value: unixToText(tx.timeFirstSeen) },
+              {
+                label: 'Bloque',
+                value: tx.block?.height !== undefined ? (
+                  <BlockLink hashOrHeight={tx.block.height}>{tx.block.height}</BlockLink>
+                ) : 'Mempool',
+              },
+            ]}
+          />
+
+          <SectionTitle>Inputs</SectionTitle>
+          <InputsTable inputs={tx.inputs || []} />
+
+          <SectionTitle>Outputs</SectionTitle>
+          <OutputsTable outputs={tx.outputs || []} />
+
+          {tx.tokenEntries && Object.keys(tx.tokenEntries).length > 0 && (
+            <>
+              <SectionTitle>Token entries</SectionTitle>
+              <Box style={{ overflowX: 'auto' }}>
+                <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#d7fdff' }}>
+                  {safeStringify(tx.tokenEntries)}
+                </pre>
+              </Box>
+            </>
+          )}
+
+          <SectionTitle>JSON crudo</SectionTitle>
+          <Box style={{ overflowX: 'auto' }}>
+            <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#d7fdff' }}>
+              {safeStringify(tx)}
+            </pre>
+          </Box>
+        </>
+      )}
     </Shell>
   );
 }
@@ -312,17 +579,24 @@ function AddressPage() {
       try {
         setState({ loading: true, error: '', data: null });
         const [history, utxos] = await Promise.all([
-          chronik.address(decodedAddress).history(0, 10),
+          chronik.address(decodedAddress).history(0, 25),
           chronik.address(decodedAddress).utxos(),
         ]);
-        if (mounted) setState({ loading: false, error: '', data: { kind: 'address', address: decodedAddress, history, utxos } });
+        if (mounted) setState({ loading: false, error: '', data: { history, utxos } });
       } catch (err) {
         if (mounted) setState({ loading: false, error: err?.message || 'No se pudo cargar la dirección.', data: null });
       }
     }
     load();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, [decodedAddress]);
+
+  const utxos = state.data?.utxos?.utxos || [];
+  const txs = state.data?.history?.txs || [];
+
+  const totalSats = utxos.reduce((acc, u) => acc + Number(u.sats || 0), 0);
 
   return (
     <Shell>
@@ -330,9 +604,65 @@ function AddressPage() {
       <div style={{ marginTop: '20px', color: '#8ff7ff', wordBreak: 'break-word' }}>
         Viendo dirección: <strong>{decodedAddress}</strong>
       </div>
+
       {state.loading && <LoadingBox />}
       {state.error && <ErrorBox error={state.error} />}
-      {state.data && <ResultBox title="Resultado: ADDRESS" data={state.data} />}
+
+      {state.data && (
+        <>
+          <StatGrid
+            items={[
+              { label: 'Dirección', value: decodedAddress },
+              { label: 'UTXOs', value: formatNumber(utxos.length) },
+              { label: 'TXs cargadas', value: formatNumber(txs.length) },
+              { label: 'Balance visible', value: satsToXec(totalSats) },
+            ]}
+          />
+
+          <SectionTitle>UTXOs</SectionTitle>
+          {utxos.length ? (
+            <div style={{ display: 'grid', gap: '12px' }}>
+              {utxos.map((utxo, idx) => (
+                <Box key={`${utxo.outpoint?.txid}-${utxo.outpoint?.outIdx}-${idx}`}>
+                  <div>
+                    TX: <TxLink txid={utxo.outpoint?.txid} />
+                  </div>
+                  <div style={{ marginTop: '6px' }}>OutIdx: {utxo.outpoint?.outIdx}</div>
+                  <div style={{ marginTop: '6px' }}>Valor: {satsToXec(utxo.sats)}</div>
+                  {utxo.token && (
+                    <div style={{ marginTop: '10px' }}>
+                      <pre
+                        style={{
+                          background: '#111',
+                          color: '#d7fdff',
+                          padding: '10px',
+                          overflowX: 'auto',
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word',
+                        }}
+                      >
+                        {safeStringify(utxo.token)}
+                      </pre>
+                    </div>
+                  )}
+                </Box>
+              ))}
+            </div>
+          ) : (
+            <Box>No hay UTXOs.</Box>
+          )}
+
+          <SectionTitle>Historial reciente</SectionTitle>
+          <TxList txs={txs} />
+
+          <SectionTitle>JSON crudo</SectionTitle>
+          <Box style={{ overflowX: 'auto' }}>
+            <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#d7fdff' }}>
+              {safeStringify(state.data)}
+            </pre>
+          </Box>
+        </>
+      )}
     </Shell>
   );
 }
@@ -347,14 +677,18 @@ function TokenPage() {
       try {
         setState({ loading: true, error: '', data: null });
         const token = await chronik.token(tokenId);
-        if (mounted) setState({ loading: false, error: '', data: { kind: 'token', token } });
+        if (mounted) setState({ loading: false, error: '', data: token });
       } catch (err) {
         if (mounted) setState({ loading: false, error: err?.message || 'No se pudo cargar el token.', data: null });
       }
     }
     load();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, [tokenId]);
+
+  const token = state.data;
 
   return (
     <Shell>
@@ -362,9 +696,30 @@ function TokenPage() {
       <div style={{ marginTop: '20px', color: '#8ff7ff', wordBreak: 'break-word' }}>
         Viendo token: <strong>{shortHex(tokenId, 20, 16)}</strong>
       </div>
+
       {state.loading && <LoadingBox />}
       {state.error && <ErrorBox error={state.error} />}
-      {state.data && <ResultBox title="Resultado: TOKEN" data={state.data} />}
+
+      {token && (
+        <>
+          <StatGrid
+            items={[
+              { label: 'Token ID', value: token.tokenId || tokenId },
+              { label: 'Ticker', value: token.tokenTicker || '—' },
+              { label: 'Nombre', value: token.tokenName || '—' },
+              { label: 'Decimales', value: token.decimals ?? '—' },
+              { label: 'URL', value: token.url || '—' },
+            ]}
+          />
+
+          <SectionTitle>JSON crudo</SectionTitle>
+          <Box style={{ overflowX: 'auto' }}>
+            <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#d7fdff' }}>
+              {safeStringify(token)}
+            </pre>
+          </Box>
+        </>
+      )}
     </Shell>
   );
 }
@@ -399,7 +754,9 @@ function SearchHashPage() {
       }
     }
     resolveHash();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, [hash, navigate]);
 
   return (
@@ -407,6 +764,15 @@ function SearchHashPage() {
       <SearchBar />
       {state.loading && <LoadingBox text="Resolviendo hash..." />}
       {state.error && <ErrorBox error={state.error} />}
+    </Shell>
+  );
+}
+
+function NotFoundPage() {
+  return (
+    <Shell>
+      <SearchBar />
+      <ErrorBox error="Ruta no encontrada." />
     </Shell>
   );
 }
@@ -421,6 +787,7 @@ export default function App() {
         <Route path="/address/:address" element={<AddressPage />} />
         <Route path="/token/:tokenId" element={<TokenPage />} />
         <Route path="/search/:hash" element={<SearchHashPage />} />
+        <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </BrowserRouter>
   );

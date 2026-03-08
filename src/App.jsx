@@ -7,6 +7,7 @@ import { resolveLinajeMeta } from './data/linajeMeta';
 
 const CHRONIK_URL = 'https://chronik.xolosarmy.xyz';
 const chronik = new ChronikClient(CHRONIK_URL);
+const RMZ_TOKEN_ID = (import.meta.env.VITE_RMZ_TOKEN_ID || '').trim().toLowerCase();
 
 function detectQueryType(value) {
   const q = value.trim();
@@ -48,6 +49,20 @@ function satsToXec(sats) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(n)} XEC`;
+}
+
+function toBigIntSafe(value) {
+  try {
+    if (value === undefined || value === null || value === '') return 0n;
+    if (typeof value === 'bigint') return value;
+    return BigInt(value);
+  } catch {
+    return 0n;
+  }
+}
+
+function formatTokenAmount(value) {
+  return new Intl.NumberFormat('es-MX').format(toBigIntSafe(value));
 }
 
 function outputScriptToAddress(outputScript) {
@@ -824,6 +839,14 @@ function AddressLink({ address }) {
   );
 }
 
+function TokenLink({ tokenId, children }) {
+  return (
+    <Link to={`/token/${tokenId}`} style={{ color: '#00eaff', wordBreak: 'break-word' }}>
+      {children || shortHex(tokenId, 18, 14)}
+    </Link>
+  );
+}
+
 function TxTable({ txs = [] }) {
   if (!txs.length) return <Box>No hay transacciones.</Box>;
 
@@ -853,6 +876,36 @@ function TxTable({ txs = [] }) {
           ))}
         </tbody>
       </table>
+    </Box>
+  );
+}
+
+function TokenBalancesCard({ balances = [] }) {
+  return (
+    <Box style={{ overflowX: 'auto' }}>
+      <div style={{ fontWeight: 'bold', marginBottom: '10px' }}>Token Balances</div>
+      {!balances.length ? (
+        <div style={{ color: '#8ff7ff' }}>No hay tokens detectados.</div>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <th style={thStyle}>Token ID</th>
+              <th style={thStyle}>Token Symbol</th>
+              <th style={thStyle}>Balance</th>
+            </tr>
+          </thead>
+          <tbody>
+            {balances.map((item) => (
+              <tr key={item.tokenId}>
+                <td style={tdStyle}><TokenLink tokenId={item.tokenId}>{shortHex(item.tokenId, 18, 14)}</TokenLink></td>
+                <td style={tdStyle}>{item.symbol || '—'}</td>
+                <td style={tdStyle}>{formatTokenAmount(item.amount)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </Box>
   );
 }
@@ -1581,7 +1634,27 @@ function AddressPage() {
           chronik.address(decodedAddress).history(0, 25),
           chronik.address(decodedAddress).utxos(),
         ]);
-        if (mounted) setState({ loading: false, error: '', data: { history, utxos } });
+        const txs = history?.txs || [];
+        const utxoList = utxos?.utxos || [];
+        const tokenIds = Array.from(new Set(
+          utxoList
+            .map((utxo) => utxo?.token?.tokenId?.toLowerCase())
+            .filter(Boolean),
+        ));
+
+        const tokenInfoById = {};
+        await Promise.all(
+          tokenIds.map(async (tokenId) => {
+            try {
+              const token = await chronik.token(tokenId);
+              tokenInfoById[tokenId] = token;
+            } catch {
+              tokenInfoById[tokenId] = null;
+            }
+          })
+        );
+
+        if (mounted) setState({ loading: false, error: '', data: { history, utxos, tokenInfoById } });
       } catch (err) {
         if (mounted) setState({ loading: false, error: err?.message || 'No se pudo cargar la dirección.', data: null });
       }
@@ -1593,6 +1666,30 @@ function AddressPage() {
   const utxos = state.data?.utxos?.utxos || [];
   const txs = state.data?.history?.txs || [];
   const totalSats = utxos.reduce((acc, u) => acc + Number(u.sats || 0), 0);
+  const tokenInfoById = state.data?.tokenInfoById || {};
+  const tokenBalances = React.useMemo(() => {
+    const balances = new Map();
+    for (const utxo of utxos) {
+      const token = utxo?.token;
+      if (!token) continue;
+
+      const tokenId = token.tokenId?.toLowerCase();
+      if (!tokenId) continue;
+
+      const amount = token.amount ?? token.atoms ?? 0;
+      const prev = balances.get(tokenId) || 0n;
+      balances.set(tokenId, prev + toBigIntSafe(amount));
+    }
+
+    return Array.from(balances.entries())
+      .map(([tokenId, amount]) => {
+        const tokenMeta = tokenInfoById[tokenId];
+        const isRmz = tokenId.toLowerCase() === RMZ_TOKEN_ID;
+        const symbol = isRmz ? 'RMZ' : (tokenMeta?.tokenTicker || tokenMeta?.genesisInfo?.tokenTicker || '');
+        return { tokenId, amount, symbol };
+      })
+      .sort((a, b) => (a.amount > b.amount ? -1 : 1));
+  }, [txs, tokenInfoById]);
 
   return (
     <Shell>
@@ -1614,6 +1711,8 @@ function AddressPage() {
               { label: 'Balance visible', value: satsToXec(totalSats) },
             ]}
           />
+
+          <TokenBalancesCard balances={tokenBalances} />
 
           <SectionTitle>Historial reciente</SectionTitle>
           <TxTable txs={txs} />

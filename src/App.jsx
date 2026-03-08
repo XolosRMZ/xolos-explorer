@@ -4,10 +4,18 @@ import { ChronikClient } from 'chronik-client';
 import * as ecashaddr from 'ecashaddrjs';
 import { findLinajeTxidBySlug } from './data/linajeIndex';
 import { LINAJE_EDITORIAL_META, resolveLinajeMeta } from './data/linajeMeta';
+import {
+  extractTokenDocumentUrl,
+  fetchIpfsMetadataByDocumentUrl,
+  resolveIpfsUri,
+  sha256HexFromString,
+} from './utils/ipfsMetadata';
 
 const CHRONIK_URL = 'https://chronik.xolosarmy.xyz';
 const chronik = new ChronikClient(CHRONIK_URL);
 const RMZ_TOKEN_ID = (import.meta.env.VITE_RMZ_TOKEN_ID || '').trim().toLowerCase();
+const tokenIpfsMetadataByIdCache = new Map();
+const tokenIpfsMetadataPromiseById = new Map();
 
 function detectQueryType(value) {
   const q = value.trim();
@@ -162,6 +170,130 @@ function slugify(value) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
+}
+
+function hasMeaningfulValue(value) {
+  if (value === undefined || value === null) return false;
+  if (typeof value === 'string') return Boolean(value.trim());
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+}
+
+function pickValueWithSource({ local, ipfs, onchain, fallback = '' }) {
+  if (hasMeaningfulValue(local)) return { value: local, source: 'local' };
+  if (hasMeaningfulValue(ipfs)) return { value: ipfs, source: 'ipfs' };
+  if (hasMeaningfulValue(onchain)) return { value: onchain, source: 'onchain' };
+  return { value: fallback, source: 'fallback' };
+}
+
+function normalizeMetadataTags(input) {
+  if (Array.isArray(input)) {
+    return input
+      .map((entry) => (entry === null || entry === undefined ? '' : String(entry).trim()))
+      .filter(Boolean);
+  }
+  if (typeof input === 'string') {
+    return input
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function buildEmptyIpfsState(tokenId = '', documentUrl = '') {
+  return {
+    ok: false,
+    attempted: false,
+    metadata: null,
+    rawText: '',
+    tokenMeta: null,
+    documentUrl,
+    resolvedUrl: '',
+    tokenId,
+    error: '',
+  };
+}
+
+async function loadTokenIpfsMetadata(tokenId, seedTokenMeta = null) {
+  const normalizedTokenId = (tokenId || '').toString().trim().toLowerCase();
+  const seedDocumentUrl = extractTokenDocumentUrl(seedTokenMeta);
+
+  if (normalizedTokenId && tokenIpfsMetadataByIdCache.has(normalizedTokenId)) {
+    const cached = tokenIpfsMetadataByIdCache.get(normalizedTokenId);
+    if (!seedDocumentUrl || cached?.documentUrl === seedDocumentUrl) {
+      return cached;
+    }
+  }
+
+  if (normalizedTokenId && tokenIpfsMetadataPromiseById.has(normalizedTokenId)) {
+    return tokenIpfsMetadataPromiseById.get(normalizedTokenId);
+  }
+
+  const loadPromise = (async () => {
+    let tokenMeta = seedTokenMeta;
+    let documentUrl = seedDocumentUrl;
+
+    if (!tokenMeta && normalizedTokenId) {
+      try {
+        tokenMeta = await chronik.token(normalizedTokenId);
+        documentUrl = extractTokenDocumentUrl(tokenMeta);
+      } catch {
+        tokenMeta = null;
+      }
+    }
+
+    if (!documentUrl) {
+      const empty = buildEmptyIpfsState(normalizedTokenId, '');
+      if (normalizedTokenId) tokenIpfsMetadataByIdCache.set(normalizedTokenId, empty);
+      return empty;
+    }
+
+    const metadataResult = await fetchIpfsMetadataByDocumentUrl(documentUrl);
+    const merged = {
+      ...metadataResult,
+      tokenMeta,
+      tokenId: normalizedTokenId,
+      documentUrl: metadataResult.documentUrl || documentUrl,
+    };
+
+    if (normalizedTokenId) tokenIpfsMetadataByIdCache.set(normalizedTokenId, merged);
+    return merged;
+  })().finally(() => {
+    if (normalizedTokenId) tokenIpfsMetadataPromiseById.delete(normalizedTokenId);
+  });
+
+  if (normalizedTokenId) tokenIpfsMetadataPromiseById.set(normalizedTokenId, loadPromise);
+  return loadPromise;
+}
+
+function useTokenIpfsMetadata(tokenId, tokenMeta = null) {
+  const normalizedTokenId = (tokenId || '').toString().trim().toLowerCase();
+  const documentUrl = extractTokenDocumentUrl(tokenMeta);
+  const [state, setState] = React.useState(
+    normalizedTokenId && tokenIpfsMetadataByIdCache.has(normalizedTokenId)
+      ? tokenIpfsMetadataByIdCache.get(normalizedTokenId)
+      : buildEmptyIpfsState(normalizedTokenId, documentUrl),
+  );
+
+  React.useEffect(() => {
+    let mounted = true;
+
+    async function load() {
+      const next = await loadTokenIpfsMetadata(normalizedTokenId, tokenMeta);
+      if (mounted) setState(next);
+    }
+
+    if (normalizedTokenId || documentUrl) {
+      load();
+    } else {
+      setState(buildEmptyIpfsState('', ''));
+    }
+
+    return () => { mounted = false; };
+  }, [normalizedTokenId, documentUrl]);
+
+  return state;
 }
 
 function buildLinajeSlug(parsed) {
@@ -890,11 +1022,7 @@ function normalizeMediaUrl(value) {
   if (!value || typeof value !== 'string') return '';
   const trimmed = value.trim();
   if (!trimmed) return '';
-  if (trimmed.startsWith('ipfs://')) {
-    const path = trimmed.slice('ipfs://'.length).replace(/^ipfs\//, '');
-    return `https://ipfs.io/ipfs/${path}`;
-  }
-  return trimmed;
+  return resolveIpfsUri(trimmed);
 }
 
 function extractImageLikeField(input) {
@@ -1074,6 +1202,8 @@ function buildXoloNftCollectionItems() {
       const theme = normalizeXoloArchiveTheme(meta.theme);
       const accent = typeof meta.accent === 'string' ? meta.accent.trim() : '';
       const backgroundNote = typeof meta.backgroundNote === 'string' ? meta.backgroundNote.trim() : '';
+      const etapa = typeof meta.etapa === 'string' ? meta.etapa.trim() : '';
+      const tags = normalizeMetadataTags(meta.tags);
 
       return {
         id: `${normalizedSlug || tokenId || title}`,
@@ -1088,31 +1218,156 @@ function buildXoloNftCollectionItems() {
         theme,
         accent,
         backgroundNote,
+        etapa,
+        tags,
         imageUrl: extractImageLikeField(meta),
         imageAlt: meta.imageAlt || `Imagen de ${title}`,
-        searchText: `${title} ${subtitle} ${normalizedSlug} ${tokenSymbol} ${tokenName} ${narrative}`.toLowerCase(),
+        searchText: `${title} ${subtitle} ${normalizedSlug} ${tokenSymbol} ${tokenName} ${narrative} ${etapa} ${tags.join(' ')}`.toLowerCase(),
       };
     })
     .filter(Boolean)
     .sort((a, b) => a.title.localeCompare(b.title, 'es', { sensitivity: 'base' }));
 }
 
+function resolveCollectionDisplayItem(item, ipfsMeta = null) {
+  const title = pickValueWithSource({
+    local: item.title,
+    ipfs: ipfsMeta?.name || ipfsMeta?.slug,
+    onchain: item.tokenSymbol || item.tokenName,
+    fallback: 'Sin titulo',
+  }).value;
+  const subtitle = pickValueWithSource({
+    local: item.subtitle,
+    ipfs: ipfsMeta?.description,
+    onchain: '',
+    fallback: '',
+  }).value;
+  const narrative = pickValueWithSource({
+    local: item.narrative,
+    ipfs: ipfsMeta?.description,
+    onchain: '',
+    fallback: '',
+  }).value;
+  const imageUrl = pickValueWithSource({
+    local: item.imageUrl,
+    ipfs: extractImageLikeField(ipfsMeta),
+    onchain: '',
+    fallback: '',
+  }).value;
+  const etapa = pickValueWithSource({
+    local: item.etapa,
+    ipfs: ipfsMeta?.etapa,
+    onchain: '',
+    fallback: '',
+  }).value;
+  const tags = pickValueWithSource({
+    local: normalizeMetadataTags(item.tags),
+    ipfs: normalizeMetadataTags(ipfsMeta?.tags),
+    onchain: [],
+    fallback: [],
+  }).value;
+  const theme = pickValueWithSource({
+    local: item.theme,
+    ipfs: ipfsMeta?.theme,
+    onchain: '',
+    fallback: 'codex',
+  }).value;
+  const accent = pickValueWithSource({
+    local: item.accent,
+    ipfs: ipfsMeta?.accent,
+    onchain: '',
+    fallback: '',
+  }).value;
+
+  return {
+    ...item,
+    title,
+    subtitle,
+    narrative,
+    imageUrl,
+    etapa,
+    tags,
+    theme,
+    accent,
+  };
+}
+
+function normalizeDocumentHash(value) {
+  if (value === undefined || value === null) return '';
+  const raw = String(value).trim().toLowerCase();
+  if (!raw) return '';
+  if (raw.startsWith('0x')) return raw.slice(2);
+  return raw;
+}
+
+function extractTokenDocumentHash(tokenInfo) {
+  const candidates = [
+    tokenInfo?.hash,
+    tokenInfo?.documentHash,
+    tokenInfo?.documentSHA256,
+    tokenInfo?.documentSha256,
+    tokenInfo?.genesisInfo?.hash,
+    tokenInfo?.genesisInfo?.documentHash,
+    tokenInfo?.genesisInfo?.documentSHA256,
+    tokenInfo?.genesisInfo?.documentSha256,
+  ];
+  const found = candidates.find((entry) => typeof entry === 'string' && entry.trim());
+  return normalizeDocumentHash(found || '');
+}
+
 function NftCollectibleCard({ item }) {
   const [imageFailed, setImageFailed] = React.useState(false);
-  const primaryTitle = item.symbol || item.name || shortHex(item.tokenId, 10, 8);
-  const secondaryTitle = item.name && item.name !== item.symbol ? item.name : '';
+  const ipfsState = useTokenIpfsMetadata(item.tokenId, item.tokenMeta);
+  const ipfsMeta = ipfsState.metadata || null;
+  const localMeta = item.editorialMeta || null;
+  const resolvedName = pickValueWithSource({
+    local: localMeta?.title || localMeta?.name,
+    ipfs: ipfsMeta?.name || ipfsMeta?.slug,
+    onchain: item.symbol || item.name,
+    fallback: shortHex(item.tokenId, 10, 8),
+  });
+  const secondaryTitle = pickValueWithSource({
+    local: localMeta?.subtitle,
+    ipfs: ipfsMeta?.description,
+    onchain: item.name && item.name !== item.symbol ? item.name : '',
+    fallback: '',
+  }).value;
   const quantityLabel = toBigIntSafe(item.amount) === 1n ? '1 collectible' : `Cantidad: ${item.humanBalance}`;
   const lineageSlug = typeof item.editorialMeta?.slug === 'string' ? item.editorialMeta.slug.trim() : '';
   const lineageTxid = typeof item.editorialMeta?.txid === 'string' ? item.editorialMeta.txid.trim() : '';
   const lineageHref = (lineageSlug || lineageTxid) ? `/linaje/${lineageSlug || lineageTxid}` : '';
-
-  const imageUrl = extractImageLikeField([
-    item.editorialMeta,
-    item.tokenMeta?.genesisInfo,
-    item.tokenMeta,
-  ]);
+  const imageUrl = pickValueWithSource({
+    local: extractImageLikeField(localMeta),
+    ipfs: extractImageLikeField(ipfsMeta),
+    onchain: extractImageLikeField([item.tokenMeta?.genesisInfo, item.tokenMeta]),
+    fallback: '',
+  }).value;
+  const etapaValue = pickValueWithSource({
+    local: localMeta?.etapa,
+    ipfs: ipfsMeta?.etapa,
+    onchain: '',
+    fallback: '',
+  }).value;
+  const tags = pickValueWithSource({
+    local: normalizeMetadataTags(localMeta?.tags),
+    ipfs: normalizeMetadataTags(ipfsMeta?.tags),
+    onchain: [],
+    fallback: [],
+  }).value;
+  const visualTheme = pickValueWithSource({
+    local: localMeta?.theme,
+    ipfs: ipfsMeta?.theme,
+    onchain: '',
+    fallback: '',
+  }).value;
+  const visualAccent = pickValueWithSource({
+    local: localMeta?.accent,
+    ipfs: ipfsMeta?.accent,
+    onchain: '',
+    fallback: '',
+  }).value;
   const showImage = Boolean(imageUrl) && !imageFailed;
-  const placeholderText = buildCollectibleInitials(item.symbol || item.name, item.tokenId);
+  const placeholderText = buildCollectibleInitials(resolvedName.value, item.tokenId);
   const actionLinkStyle = {
     display: 'inline-flex',
     alignItems: 'center',
@@ -1150,7 +1405,7 @@ function NftCollectibleCard({ item }) {
         {showImage ? (
           <img
             src={imageUrl}
-            alt={primaryTitle}
+            alt={resolvedName.value}
             loading="lazy"
             style={{ width: '100%', height: '110px', objectFit: 'cover', display: 'block' }}
             onError={() => setImageFailed(true)}
@@ -1160,8 +1415,32 @@ function NftCollectibleCard({ item }) {
         )}
       </div>
 
-      <div style={{ color: '#d5fcff', fontWeight: 'bold', wordBreak: 'break-word' }}>{primaryTitle}</div>
+      <div style={{ color: '#d5fcff', fontWeight: 'bold', wordBreak: 'break-word' }}>{resolvedName.value}</div>
       {secondaryTitle && <div style={{ color: '#8ff7ff', fontSize: '0.82rem', wordBreak: 'break-word' }}>{secondaryTitle}</div>}
+      {etapaValue && <div style={{ color: '#9adbe2', fontSize: '0.8rem' }}>Etapa: {etapaValue}</div>}
+      {(visualTheme || visualAccent) && (
+        <div style={{ color: '#79ced6', fontSize: '0.76rem' }}>
+          {(visualTheme && `Tema: ${visualTheme}`) || ''}{visualTheme && visualAccent ? ' · ' : ''}{(visualAccent && `Acento: ${visualAccent}`) || ''}
+        </div>
+      )}
+      {tags.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+          {tags.slice(0, 3).map((tag) => (
+            <span
+              key={`${item.tokenId}-${tag}`}
+              style={{
+                border: '1px solid #16424a',
+                color: '#8ff7ff',
+                background: 'rgba(1, 34, 40, 0.55)',
+                padding: '2px 7px',
+                fontSize: '0.72rem',
+              }}
+            >
+              #{tag}
+            </span>
+          ))}
+        </div>
+      )}
       <div style={{ color: '#9adbe2', fontSize: '0.85rem' }}>{quantityLabel}</div>
       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
         <Link to={`/token/${item.tokenId}`} style={actionLinkStyle}>
@@ -1179,6 +1458,11 @@ function NftCollectibleCard({ item }) {
 
 function XoloNftCollectionCard({ item }) {
   const [imageFailed, setImageFailed] = React.useState(false);
+  const ipfsState = useTokenIpfsMetadata(item.tokenId);
+  const resolvedItem = React.useMemo(
+    () => resolveCollectionDisplayItem(item, ipfsState.metadata),
+    [item, ipfsState.metadata],
+  );
   const curatedHref = item.slug ? `/collection/xolosnft/${item.slug}` : '';
   const actionLinkStyle = {
     display: 'inline-flex',
@@ -1193,8 +1477,8 @@ function XoloNftCollectionCard({ item }) {
     color: '#8ff7ff',
     letterSpacing: '0.03em',
   };
-  const showImage = Boolean(item.imageUrl) && !imageFailed;
-  const placeholderText = buildCollectibleInitials(item.title, item.tokenId || item.slug);
+  const showImage = Boolean(resolvedItem.imageUrl) && !imageFailed;
+  const placeholderText = buildCollectibleInitials(resolvedItem.title, item.tokenId || item.slug);
   const primaryContent = (
     <>
       <div
@@ -1209,8 +1493,8 @@ function XoloNftCollectionCard({ item }) {
       >
         {showImage ? (
           <img
-            src={item.imageUrl}
-            alt={item.imageAlt || item.title}
+            src={resolvedItem.imageUrl}
+            alt={item.imageAlt || resolvedItem.title}
             loading="lazy"
             style={{ width: '100%', height: '120px', objectFit: 'cover', display: 'block' }}
             onError={() => setImageFailed(true)}
@@ -1220,17 +1504,36 @@ function XoloNftCollectionCard({ item }) {
         )}
       </div>
 
-      <div style={{ color: '#d5fcff', fontWeight: 'bold', wordBreak: 'break-word' }}>{item.title}</div>
-      {item.subtitle && (
-        <div style={{ color: '#99edf5', fontSize: '0.86rem', fontStyle: 'italic', lineHeight: 1.45 }}>{item.subtitle}</div>
+      <div style={{ color: '#d5fcff', fontWeight: 'bold', wordBreak: 'break-word' }}>{resolvedItem.title}</div>
+      {resolvedItem.subtitle && (
+        <div style={{ color: '#99edf5', fontSize: '0.86rem', fontStyle: 'italic', lineHeight: 1.45 }}>{resolvedItem.subtitle}</div>
       )}
       {item.tokenSymbol && (
         <div style={{ color: '#8ff7ff', fontSize: '0.82rem', wordBreak: 'break-word' }}>
           {item.tokenSymbol}
         </div>
       )}
-      {item.narrative && (
-        <div style={{ color: '#9adbe2', fontSize: '0.85rem', lineHeight: 1.4 }}>{item.narrative}</div>
+      {resolvedItem.narrative && (
+        <div style={{ color: '#9adbe2', fontSize: '0.85rem', lineHeight: 1.4 }}>{resolvedItem.narrative}</div>
+      )}
+      {resolvedItem.etapa && <div style={{ color: '#8ac9d0', fontSize: '0.8rem' }}>Etapa: {resolvedItem.etapa}</div>}
+      {resolvedItem.tags?.length > 0 && (
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+          {resolvedItem.tags.slice(0, 3).map((tag) => (
+            <span
+              key={`${item.id}-${tag}`}
+              style={{
+                border: '1px solid #16424a',
+                color: '#8ff7ff',
+                background: 'rgba(1, 34, 40, 0.55)',
+                padding: '2px 7px',
+                fontSize: '0.72rem',
+              }}
+            >
+              #{tag}
+            </span>
+          ))}
+        </div>
       )}
       {item.slug && <div style={{ color: '#78cad2', fontSize: '0.8rem' }}>Slug: {item.slug}</div>}
       <div style={{ color: '#7dffe4', fontSize: '0.82rem', letterSpacing: '0.04em' }}>Abrir ficha curada →</div>
@@ -1331,9 +1634,14 @@ function XoloNftCollectionPage() {
 
 function XoloNftCodexCard({ item }) {
   const [imageFailed, setImageFailed] = React.useState(false);
+  const ipfsState = useTokenIpfsMetadata(item.tokenId);
+  const resolvedItem = React.useMemo(
+    () => resolveCollectionDisplayItem(item, ipfsState.metadata),
+    [item, ipfsState.metadata],
+  );
   const curatedHref = item.slug ? `/collection/xolosnft/${item.slug}` : '';
-  const showImage = Boolean(item.imageUrl) && !imageFailed;
-  const placeholderText = buildCollectibleInitials(item.title, item.tokenId || item.slug);
+  const showImage = Boolean(resolvedItem.imageUrl) && !imageFailed;
+  const placeholderText = buildCollectibleInitials(resolvedItem.title, item.tokenId || item.slug);
   const actionLinkStyle = {
     display: 'inline-flex',
     alignItems: 'center',
@@ -1361,8 +1669,8 @@ function XoloNftCodexCard({ item }) {
       >
         {showImage ? (
           <img
-            src={item.imageUrl}
-            alt={item.imageAlt || item.title}
+            src={resolvedItem.imageUrl}
+            alt={item.imageAlt || resolvedItem.title}
             loading="lazy"
             style={{ width: '100%', minHeight: '220px', maxHeight: '320px', objectFit: 'cover', display: 'block' }}
             onError={() => setImageFailed(true)}
@@ -1379,11 +1687,11 @@ function XoloNftCodexCard({ item }) {
           Archivo del Linaje Vivo
         </div>
         <h3 style={{ margin: '8px 0 0', color: '#dcfdff', fontSize: '1.55rem', lineHeight: 1.15 }}>
-          {item.title}
+          {resolvedItem.title}
         </h3>
-        {item.subtitle && (
+        {resolvedItem.subtitle && (
           <div style={{ marginTop: '8px', color: '#b0eef4', fontSize: '0.93rem', fontStyle: 'italic', lineHeight: 1.45 }}>
-            {item.subtitle}
+            {resolvedItem.subtitle}
           </div>
         )}
         {item.tokenSymbol && (
@@ -1392,8 +1700,31 @@ function XoloNftCodexCard({ item }) {
           </div>
         )}
         <div style={{ marginTop: '10px', color: '#b9f4f9', lineHeight: 1.5, minHeight: '56px' }}>
-          {item.narrative || 'Pieza del archivo editorial XOLOSNFT con referencia al linaje vivo.'}
+          {resolvedItem.narrative || 'Pieza del archivo editorial XOLOSNFT con referencia al linaje vivo.'}
         </div>
+        {resolvedItem.etapa && (
+          <div style={{ marginTop: '8px', color: '#9aeaf2', fontSize: '0.88rem' }}>
+            Etapa: {resolvedItem.etapa}
+          </div>
+        )}
+        {resolvedItem.tags?.length > 0 && (
+          <div style={{ marginTop: '8px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            {resolvedItem.tags.slice(0, 4).map((tag) => (
+              <span
+                key={`${item.id}-codex-${tag}`}
+                style={{
+                  border: '1px solid #16424a',
+                  color: '#8ff7ff',
+                  background: 'rgba(1, 34, 40, 0.55)',
+                  padding: '2px 7px',
+                  fontSize: '0.72rem',
+                }}
+              >
+                #{tag}
+              </span>
+            ))}
+          </div>
+        )}
         {item.slug && <div style={{ marginTop: '10px', color: '#7bcfd8', fontSize: '0.84rem' }}>Clave: {item.slug}</div>}
         <div style={{ marginTop: '10px', color: '#7dffe4', fontSize: '0.85rem', letterSpacing: '0.03em' }}>
           Abrir entrada de archivo →
@@ -1524,6 +1855,11 @@ function XoloNftCollectionItemPage() {
     color: '#d7fbff',
     wordBreak: 'break-word',
   };
+  const ipfsState = useTokenIpfsMetadata(item?.tokenId || '');
+  const resolvedItem = React.useMemo(
+    () => (item ? resolveCollectionDisplayItem(item, ipfsState.metadata) : null),
+    [item, ipfsState.metadata],
+  );
 
   if (!item) {
     return (
@@ -1537,7 +1873,7 @@ function XoloNftCollectionItemPage() {
 
   const tokenLabel = [item.tokenSymbol, item.tokenName].filter(Boolean).join(' / ') || '—';
   const lineageHref = item.lineageRef ? `/linaje/${item.lineageRef}` : '';
-  const themeStyles = buildXoloArchiveThemeStyles(item.theme, item.accent);
+  const themeStyles = buildXoloArchiveThemeStyles(resolvedItem.theme, resolvedItem.accent);
   const resolvedActionLinkStyle = {
     ...actionLinkStyle,
     border: `1px solid ${themeStyles.linkBorder}`,
@@ -1550,10 +1886,10 @@ function XoloNftCollectionItemPage() {
   return (
     <Shell>
       <SearchBar />
-      <SectionTitle>{item.title}</SectionTitle>
-      {item.subtitle && (
+      <SectionTitle>{resolvedItem.title}</SectionTitle>
+      {resolvedItem.subtitle && (
         <div style={{ marginTop: '-4px', marginBottom: '10px', color: '#99edf5', fontStyle: 'italic', lineHeight: 1.45 }}>
-          {item.subtitle}
+          {resolvedItem.subtitle}
         </div>
       )}
       <div style={{ marginBottom: '14px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
@@ -1585,15 +1921,15 @@ function XoloNftCollectionItemPage() {
             overflow: 'hidden',
           }}
         >
-          {item.imageUrl ? (
+          {resolvedItem.imageUrl ? (
             <img
-              src={item.imageUrl}
-              alt={item.imageAlt || item.title}
+              src={resolvedItem.imageUrl}
+              alt={item.imageAlt || resolvedItem.title}
               style={{ width: '100%', minHeight: '320px', maxHeight: '520px', objectFit: 'cover', display: 'block' }}
             />
           ) : (
             <div style={{ color: themeStyles.placeholder, fontWeight: 'bold', letterSpacing: '0.12em', fontSize: '1.5rem' }}>
-              {buildCollectibleInitials(item.title, item.tokenId || item.slug)}
+              {buildCollectibleInitials(resolvedItem.title, item.tokenId || item.slug)}
             </div>
           )}
         </div>
@@ -1603,11 +1939,34 @@ function XoloNftCollectionItemPage() {
             Entrada curada
           </div>
           <div style={{ marginTop: '10px', color: themeStyles.narrative, lineHeight: 1.65 }}>
-            {item.narrative || 'Registro editorial del archivo XOLOSNFT, vinculado al linaje vivo y a su rastro on-chain.'}
+            {resolvedItem.narrative || 'Registro editorial del archivo XOLOSNFT, vinculado al linaje vivo y a su rastro on-chain.'}
           </div>
           {item.backgroundNote && (
             <div style={{ marginTop: '10px', color: themeStyles.value, lineHeight: 1.55, fontSize: '0.92rem' }}>
               {item.backgroundNote}
+            </div>
+          )}
+          {resolvedItem.etapa && (
+            <div style={{ marginTop: '10px', color: themeStyles.value, fontSize: '0.92rem' }}>
+              <strong>Etapa:</strong> {resolvedItem.etapa}
+            </div>
+          )}
+          {resolvedItem.tags?.length > 0 && (
+            <div style={{ marginTop: '10px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              {resolvedItem.tags.map((tag) => (
+                <span
+                  key={`${item.id}-detail-${tag}`}
+                  style={{
+                    border: `1px solid ${themeStyles.linkBorder}`,
+                    color: themeStyles.linkColor,
+                    background: themeStyles.linkBg,
+                    padding: '2px 8px',
+                    fontSize: '0.76rem',
+                  }}
+                >
+                  #{tag}
+                </span>
+              ))}
             </div>
           )}
         </Box>
@@ -1632,7 +1991,7 @@ function XoloNftCollectionItemPage() {
             </div>
             <div>
               <div style={resolvedMetaLabelStyle}>Tema editorial</div>
-              <div style={resolvedMetaValueStyle}>{item.theme || 'codex'}</div>
+              <div style={resolvedMetaValueStyle}>{resolvedItem.theme || 'codex'}</div>
             </div>
           </div>
         </Box>
@@ -2681,6 +3040,11 @@ function AddressPage() {
 function TokenPage() {
   const { tokenId } = useParams();
   const [state, setState] = React.useState({ loading: true, error: '', data: null });
+  const [integrityState, setIntegrityState] = React.useState({
+    loading: false,
+    computedHash: '',
+    error: '',
+  });
 
   React.useEffect(() => {
     let mounted = true;
@@ -2698,6 +3062,184 @@ function TokenPage() {
   }, [tokenId]);
 
   const token = state.data;
+  const localMeta = React.useMemo(() => resolveLinajeMeta({ txid: tokenId }), [tokenId]);
+  const ipfsState = useTokenIpfsMetadata(tokenId, token);
+  const ipfsMeta = ipfsState.metadata || null;
+  const onChainDocumentHash = React.useMemo(() => extractTokenDocumentHash(token), [token]);
+  const sourceDocumentUrl = ipfsState.resolvedUrl || ipfsState.documentUrl || token?.genesisInfo?.url || token?.url || '';
+
+  React.useEffect(() => {
+    let mounted = true;
+
+    async function computeIntegrityHash() {
+      if (!onChainDocumentHash || !ipfsState.ok || !ipfsState.rawText) {
+        if (mounted) {
+          setIntegrityState({ loading: false, computedHash: '', error: '' });
+        }
+        return;
+      }
+
+      if (mounted) {
+        setIntegrityState({ loading: true, computedHash: '', error: '' });
+      }
+
+      try {
+        const computedHash = await sha256HexFromString(ipfsState.rawText);
+        if (mounted) {
+          setIntegrityState({ loading: false, computedHash: normalizeDocumentHash(computedHash), error: '' });
+        }
+      } catch (err) {
+        if (mounted) {
+          setIntegrityState({
+            loading: false,
+            computedHash: '',
+            error: err?.message || 'hash-compute-failed',
+          });
+        }
+      }
+    }
+
+    computeIntegrityHash();
+    return () => { mounted = false; };
+  }, [onChainDocumentHash, ipfsState.ok, ipfsState.rawText]);
+
+  const resolvedName = pickValueWithSource({
+    local: localMeta?.title || localMeta?.name,
+    ipfs: ipfsMeta?.name || ipfsMeta?.slug,
+    onchain: token?.tokenName || token?.genesisInfo?.tokenName,
+    fallback: '—',
+  });
+  const resolvedDescription = pickValueWithSource({
+    local: localMeta?.narrative || localMeta?.nota || localMeta?.subtitle,
+    ipfs: ipfsMeta?.description,
+    onchain: token?.description || token?.genesisInfo?.description,
+    fallback: '—',
+  });
+  const resolvedImage = pickValueWithSource({
+    local: extractImageLikeField(localMeta),
+    ipfs: extractImageLikeField(ipfsMeta),
+    onchain: extractImageLikeField([token?.genesisInfo, token]),
+    fallback: '',
+  });
+  const resolvedEtapa = pickValueWithSource({
+    local: localMeta?.etapa,
+    ipfs: ipfsMeta?.etapa,
+    onchain: '',
+    fallback: '—',
+  });
+  const resolvedPadre = pickValueWithSource({
+    local: localMeta?.padre,
+    ipfs: ipfsMeta?.padre || ipfsMeta?.parent,
+    onchain: '',
+    fallback: '—',
+  });
+  const resolvedMadre = pickValueWithSource({
+    local: localMeta?.madre,
+    ipfs: ipfsMeta?.madre,
+    onchain: '',
+    fallback: '—',
+  });
+  const resolvedCamada = pickValueWithSource({
+    local: localMeta?.camada,
+    ipfs: ipfsMeta?.camada,
+    onchain: '',
+    fallback: '—',
+  });
+  const resolvedRegistroFCM = pickValueWithSource({
+    local: localMeta?.registroFCM,
+    ipfs: ipfsMeta?.registroFCM,
+    onchain: '',
+    fallback: '—',
+  });
+  const resolvedMicrochip = pickValueWithSource({
+    local: localMeta?.microchip,
+    ipfs: ipfsMeta?.microchip,
+    onchain: '',
+    fallback: '—',
+  });
+  const resolvedTheme = pickValueWithSource({
+    local: localMeta?.theme,
+    ipfs: ipfsMeta?.theme,
+    onchain: '',
+    fallback: '—',
+  });
+  const resolvedTags = pickValueWithSource({
+    local: normalizeMetadataTags(localMeta?.tags),
+    ipfs: normalizeMetadataTags(ipfsMeta?.tags),
+    onchain: [],
+    fallback: [],
+  });
+  const preferredSource = [
+    resolvedName,
+    resolvedDescription,
+    resolvedImage,
+    resolvedEtapa,
+    resolvedPadre,
+    resolvedMadre,
+    resolvedCamada,
+    resolvedRegistroFCM,
+    resolvedMicrochip,
+    resolvedTheme,
+    resolvedTags,
+  ]
+    .map((entry) => entry.source)
+    .find((source) => source === 'local')
+    || [
+      resolvedName,
+      resolvedDescription,
+      resolvedImage,
+      resolvedEtapa,
+      resolvedPadre,
+      resolvedMadre,
+      resolvedCamada,
+      resolvedRegistroFCM,
+      resolvedMicrochip,
+      resolvedTheme,
+      resolvedTags,
+    ]
+      .map((entry) => entry.source)
+      .find((source) => source === 'ipfs')
+    || '';
+  const hasOnChainHash = Boolean(onChainDocumentHash);
+  const hashMatches = hasOnChainHash
+    && Boolean(integrityState.computedHash)
+    && integrityState.computedHash === onChainDocumentHash;
+  const ipfsFetchFailed = ipfsState.attempted && !ipfsState.ok;
+  const canCompare = hasOnChainHash && ipfsState.ok && Boolean(ipfsState.rawText);
+  const integrityStatus = !hasOnChainHash
+    ? 'unavailable'
+    : hashMatches
+      ? 'verified'
+      : canCompare
+        ? 'mismatch'
+        : 'failed';
+  const integrityVisual = integrityStatus === 'verified'
+    ? {
+      border: '#2fd38f',
+      background: 'rgba(10, 46, 28, 0.68)',
+      color: '#afffd8',
+      label: 'Integridad verificada',
+    }
+    : integrityStatus === 'mismatch'
+      ? {
+        border: '#ff9351',
+        background: 'rgba(52, 23, 9, 0.72)',
+        color: '#ffd4a8',
+        label: 'Hash no coincide con la génesis',
+      }
+      : integrityStatus === 'unavailable'
+        ? {
+          border: '#2d7080',
+          background: 'rgba(7, 27, 36, 0.72)',
+          color: '#9ed7e2',
+          label: 'No hay hash on-chain disponible',
+        }
+        : {
+          border: '#cf6640',
+          background: 'rgba(48, 20, 12, 0.72)',
+          color: '#ffbea5',
+          label: 'No se pudo verificar',
+        };
 
   return (
     <Shell>
@@ -2710,15 +3252,90 @@ function TokenPage() {
       {state.error && <ErrorBox error={state.error} />}
 
       {token && (
-        <StatGrid
-          items={[
-            { label: 'Token ID', value: token.tokenId || tokenId },
-            { label: 'Ticker', value: token.tokenTicker || '—' },
-            { label: 'Nombre', value: token.tokenName || '—' },
-            { label: 'Decimales', value: token.decimals ?? '—' },
-            { label: 'URL', value: token.url || '—' },
-          ]}
-        />
+        <>
+          <StatGrid
+            items={[
+              { label: 'Token ID', value: token.tokenId || tokenId },
+              { label: 'Ticker', value: token.tokenTicker || '—' },
+              { label: 'Nombre', value: token.tokenName || '—' },
+              { label: 'Decimales', value: token.decimals ?? '—' },
+              { label: 'URL', value: token.url || token.genesisInfo?.url || '—' },
+            ]}
+          />
+
+          <SectionTitle>Metadatos IPFS</SectionTitle>
+          <Box>
+            {preferredSource === 'local' && (
+              <div style={{ color: '#8ff7ff', marginBottom: '10px', fontSize: '0.84rem' }}>Fuente: metadata local</div>
+            )}
+            {preferredSource === 'ipfs' && (
+              <div style={{ color: '#8ff7ff', marginBottom: '10px', fontSize: '0.84rem' }}>Fuente: IPFS metadata</div>
+            )}
+            {ipfsState.attempted && !ipfsState.ok && (
+              <div style={{ color: '#9adbe2', marginBottom: '10px', fontSize: '0.82rem' }}>
+                No se pudieron cargar metadatos IPFS.
+              </div>
+            )}
+            {resolvedImage.value && (
+              <div style={{ marginBottom: '10px' }}>
+                <img
+                  src={resolvedImage.value}
+                  alt={resolvedName.value !== '—' ? resolvedName.value : `NFT ${shortHex(tokenId, 12, 8)}`}
+                  style={{ width: '100%', maxWidth: '440px', border: '1px solid #1c515b', display: 'block' }}
+                />
+              </div>
+            )}
+            <div style={{ display: 'grid', gap: '7px' }}>
+              <div><strong style={{ color: '#8ff7ff' }}>name:</strong> {resolvedName.value}</div>
+              <div><strong style={{ color: '#8ff7ff' }}>description:</strong> {resolvedDescription.value}</div>
+              <div><strong style={{ color: '#8ff7ff' }}>etapa:</strong> {resolvedEtapa.value}</div>
+              <div><strong style={{ color: '#8ff7ff' }}>padre:</strong> {resolvedPadre.value}</div>
+              <div><strong style={{ color: '#8ff7ff' }}>madre:</strong> {resolvedMadre.value}</div>
+              <div><strong style={{ color: '#8ff7ff' }}>camada:</strong> {resolvedCamada.value}</div>
+              <div><strong style={{ color: '#8ff7ff' }}>registroFCM:</strong> {resolvedRegistroFCM.value}</div>
+              <div><strong style={{ color: '#8ff7ff' }}>microchip:</strong> {resolvedMicrochip.value}</div>
+              <div><strong style={{ color: '#8ff7ff' }}>theme:</strong> {resolvedTheme.value}</div>
+              <div>
+                <strong style={{ color: '#8ff7ff' }}>tags:</strong>{' '}
+                {resolvedTags.value.length ? resolvedTags.value.join(', ') : '—'}
+              </div>
+            </div>
+          </Box>
+
+          <SectionTitle>Integridad de metadata</SectionTitle>
+          <Box
+            style={{
+              borderColor: integrityVisual.border,
+              background: integrityVisual.background,
+            }}
+          >
+            <div style={{ color: integrityVisual.color, fontWeight: 'bold' }}>{integrityVisual.label}</div>
+            {integrityState.loading && (
+              <div style={{ marginTop: '8px', color: '#8ff7ff', fontSize: '0.85rem' }}>
+                Calculando SHA-256...
+              </div>
+            )}
+            {ipfsFetchFailed && (
+              <div style={{ marginTop: '8px', color: '#8ff7ff', fontSize: '0.85rem' }}>
+                Error IPFS: {ipfsState.error || 'fetch-failed'}
+              </div>
+            )}
+            {integrityState.error && (
+              <div style={{ marginTop: '8px', color: '#8ff7ff', fontSize: '0.85rem' }}>
+                Error hash: {integrityState.error}
+              </div>
+            )}
+
+            <details style={{ marginTop: '10px' }}>
+              <summary style={{ cursor: 'pointer', color: '#8ff7ff' }}>Detalles técnicos</summary>
+              <div style={{ marginTop: '8px', display: 'grid', gap: '6px', wordBreak: 'break-word', fontSize: '0.86rem' }}>
+                <div><strong style={{ color: '#8ff7ff' }}>Hash on-chain:</strong> {onChainDocumentHash || '—'}</div>
+                <div><strong style={{ color: '#8ff7ff' }}>Hash calculado:</strong> {integrityState.computedHash || '—'}</div>
+                <div><strong style={{ color: '#8ff7ff' }}>Documento:</strong> {sourceDocumentUrl || '—'}</div>
+              </div>
+            </details>
+          </Box>
+        </>
       )}
     </Shell>
   );

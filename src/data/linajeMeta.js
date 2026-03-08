@@ -30,6 +30,9 @@ export const LINAJE_EDITORIAL_META = Object.freeze({
   //   imagePlaceholder: 'TR',
   //   avatarUrl: '/linaje/tika.webp',
   //   coverUrl: '/linaje/tika-cover.webp',
+  //   theme: 'codex', // opcional: obsidian | codex | jade | ritual | neon
+  //   accent: '#00eaff', // opcional: color CSS para acento visual en ficha individual
+  //   backgroundNote: 'Nota ceremonial opcional para la entrada curada.',
   //   tags: ['linaje', 'xoloitzcuintle', 'ramirez'],
   //   nota: 'Primera inscripción narrativa del Archivo del Linaje Vivo.',
   //   links: {

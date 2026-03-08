@@ -1,9 +1,9 @@
 import React, { useMemo, useState } from 'react';
-import { BrowserRouter, Link, Routes, Route, useNavigate, useParams } from 'react-router-dom';
+import { BrowserRouter, Link, NavLink, Routes, Route, useNavigate, useParams } from 'react-router-dom';
 import { ChronikClient } from 'chronik-client';
 import * as ecashaddr from 'ecashaddrjs';
 import { findLinajeTxidBySlug } from './data/linajeIndex';
-import { resolveLinajeMeta } from './data/linajeMeta';
+import { LINAJE_EDITORIAL_META, resolveLinajeMeta } from './data/linajeMeta';
 
 const CHRONIK_URL = 'https://chronik.xolosarmy.xyz';
 const chronik = new ChronikClient(CHRONIK_URL);
@@ -63,6 +63,21 @@ function toBigIntSafe(value) {
 
 function formatTokenAmount(value) {
   return new Intl.NumberFormat('es-MX').format(toBigIntSafe(value));
+}
+
+function formatTokenAmountWithDecimals(value, decimals) {
+  const atoms = toBigIntSafe(value);
+  const safeDecimals = Number.isFinite(Number(decimals)) ? Math.max(0, Number(decimals)) : 0;
+  if (safeDecimals === 0) return formatTokenAmount(atoms);
+
+  const negative = atoms < 0n;
+  const absAtoms = negative ? -atoms : atoms;
+  const base = 10n ** BigInt(safeDecimals);
+  const whole = absAtoms / base;
+  const fraction = (absAtoms % base).toString().padStart(safeDecimals, '0').replace(/0+$/, '');
+  const wholeText = new Intl.NumberFormat('es-MX').format(whole);
+
+  return `${negative ? '-' : ''}${wholeText}${fraction ? `.${fraction}` : ''}`;
 }
 
 function outputScriptToAddress(outputScript) {
@@ -221,6 +236,46 @@ function Box({ children, style = {} }) {
   );
 }
 
+const navLinkStyle = ({ isActive }) => ({
+  color: isActive ? '#050505' : '#7ce9f4',
+  textDecoration: 'none',
+  border: `1px solid ${isActive ? '#00eaff' : '#194a52'}`,
+  background: isActive ? '#00eaff' : '#09181d',
+  padding: '8px 12px',
+  fontSize: '0.88rem',
+  letterSpacing: '0.03em',
+});
+
+function GlobalNav() {
+  return (
+    <div
+      style={{
+        position: 'sticky',
+        top: 0,
+        zIndex: 20,
+        marginBottom: '24px',
+        paddingBottom: '12px',
+        borderBottom: '1px solid #17454e',
+        background: 'linear-gradient(180deg, rgba(5,5,5,0.98) 0%, rgba(5,5,5,0.9) 100%)',
+        backdropFilter: 'blur(4px)',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+        <Link to="/" style={{ color: '#00eaff', textDecoration: 'none', fontWeight: 'bold', letterSpacing: '0.04em' }}>
+          XOLOS EXPLORER
+        </Link>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <NavLink to="/" end style={navLinkStyle}>Home</NavLink>
+          <NavLink to="/explorer" style={navLinkStyle}>Explorer</NavLink>
+          <NavLink to="/linaje" style={navLinkStyle}>Linaje</NavLink>
+          <NavLink to="/collection/xolosnft" style={navLinkStyle}>Colección</NavLink>
+          <NavLink to="/status" style={navLinkStyle}>Nodo</NavLink>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Shell({ children }) {
   return (
     <div
@@ -228,28 +283,12 @@ function Shell({ children }) {
         background: '#050505',
         color: '#00eaff',
         minHeight: '100vh',
-        padding: '40px',
+        padding: '22px',
         fontFamily: 'monospace',
       }}
     >
       <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
-        <div style={{ marginBottom: '20px' }}>
-          <Link to="/" style={{ color: '#00eaff', textDecoration: 'none' }}>
-            <h1 style={{ fontSize: '3rem', marginBottom: '10px' }}>XOLOS EXPLORER</h1>
-          </Link>
-          <p style={{ color: '#8ff7ff', marginBottom: '20px' }}>
-            Explorador mínimo avanzado conectado a tu Chronik soberano
-          </p>
-          <Box style={{ marginBottom: '20px' }}>
-            <div><strong>Endpoint:</strong> {CHRONIK_URL}</div>
-          </Box>
-
-          <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', marginBottom: '20px' }}>
-            <Link to="/explorer" style={{ color: '#00eaff' }}>Explorer</Link>
-            <Link to="/linaje" style={{ color: '#00eaff' }}>Linaje</Link>
-            <Link to="/block/9000" style={{ color: '#00eaff' }}>Bloque ejemplo</Link>
-          </div>
-        </div>
+        <GlobalNav />
         {children}
       </div>
     </div>
@@ -847,6 +886,780 @@ function TokenLink({ tokenId, children }) {
   );
 }
 
+function normalizeMediaUrl(value) {
+  if (!value || typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (trimmed.startsWith('ipfs://')) {
+    const path = trimmed.slice('ipfs://'.length).replace(/^ipfs\//, '');
+    return `https://ipfs.io/ipfs/${path}`;
+  }
+  return trimmed;
+}
+
+function extractImageLikeField(input) {
+  if (!input) return '';
+  if (typeof input === 'string') {
+    const text = input.trim();
+    const seemsImage = /^data:image\//i.test(text)
+      || /\.(png|jpg|jpeg|webp|gif|avif|svg)(\?|#|$)/i.test(text)
+      || /image|thumbnail|cover|avatar|icon|logo|art/i.test(text);
+    return seemsImage ? normalizeMediaUrl(text) : '';
+  }
+  if (Array.isArray(input)) {
+    for (const value of input) {
+      const found = extractImageLikeField(value);
+      if (found) return found;
+    }
+    return '';
+  }
+  if (typeof input === 'object') {
+    const candidateKeys = [
+      'image', 'imageUrl', 'imageURL', 'imageUri', 'imageURI',
+      'cover', 'coverUrl', 'coverURL',
+      'thumbnail', 'thumbnailUrl', 'thumbnailURL',
+      'avatar', 'avatarUrl', 'avatarURL',
+      'icon', 'iconUrl', 'iconURL',
+      'logo', 'logoUrl', 'logoURL',
+      'artwork', 'artworkUrl', 'previewImage',
+      'url', 'uri',
+    ];
+    for (const key of candidateKeys) {
+      if (key in input) {
+        const found = extractImageLikeField(input[key]);
+        if (found) return found;
+      }
+    }
+  }
+  return '';
+}
+
+function buildCollectibleInitials(label, tokenId) {
+  const base = (label || '').trim();
+  if (base) {
+    const tokens = base.split(/\s+/).filter(Boolean);
+    if (tokens.length > 1) return `${tokens[0][0] || ''}${tokens[1][0] || ''}`.toUpperCase();
+    return base.slice(0, 2).toUpperCase();
+  }
+  return shortHex(tokenId, 2, 0).toUpperCase();
+}
+
+const XOLO_ARCHIVE_THEME_KEYS = Object.freeze(['obsidian', 'codex', 'jade', 'ritual', 'neon']);
+
+function normalizeXoloArchiveTheme(value) {
+  if (!value || typeof value !== 'string') return 'codex';
+  const normalized = value.trim().toLowerCase();
+  return XOLO_ARCHIVE_THEME_KEYS.includes(normalized) ? normalized : 'codex';
+}
+
+function buildXoloArchiveThemeStyles(theme = 'codex', accent = '') {
+  const themes = {
+    obsidian: {
+      border: '#555b74',
+      articleBg: 'linear-gradient(165deg, #08090d 0%, #121722 54%, #1a2234 100%)',
+      articleShadow: '0 0 0 1px #2f3a58 inset, 0 0 34px rgba(120, 142, 201, 0.2)',
+      frameBorder: '#4f5f8c',
+      frameBg: 'radial-gradient(circle at 16% 10%, #3b4669 0%, #181f2f 45%, #0b0d12 100%)',
+      label: '#adb8e0',
+      value: '#eef1ff',
+      panelBg: 'rgba(15, 18, 28, 0.82)',
+      panelTitle: '#cad5ff',
+      narrative: '#e6ecff',
+      linkBorder: '#7588cc',
+      linkBg: '#172039',
+      linkColor: '#e8eeff',
+      breadcrumb: '#beccff',
+      placeholder: '#e8eeff',
+    },
+    codex: {
+      border: '#00eaff',
+      articleBg: 'linear-gradient(165deg, #050e13 0%, #0a1a22 48%, #0d2731 100%)',
+      articleShadow: '0 0 0 1px #103d46 inset, 0 0 34px rgba(0, 234, 255, 0.16)',
+      frameBorder: '#1f6570',
+      frameBg: 'radial-gradient(circle at 20% 15%, #1a5d66 0%, #0d1d24 46%, #061015 100%)',
+      label: '#79ced6',
+      value: '#d7fbff',
+      panelBg: 'rgba(7, 24, 30, 0.72)',
+      panelTitle: '#86eaf2',
+      narrative: '#caf9ff',
+      linkBorder: '#2abfce',
+      linkBg: '#0a1c22',
+      linkColor: '#b4fbff',
+      breadcrumb: '#7dffe4',
+      placeholder: '#9feeff',
+    },
+    jade: {
+      border: '#46c08a',
+      articleBg: 'linear-gradient(160deg, #05110b 0%, #0e2718 50%, #1e3a24 100%)',
+      articleShadow: '0 0 0 1px #205437 inset, 0 0 34px rgba(70, 192, 138, 0.2)',
+      frameBorder: '#3f9368',
+      frameBg: 'radial-gradient(circle at 24% 12%, #4aa778 0%, #1d3a28 48%, #08140d 100%)',
+      label: '#9de4bf',
+      value: '#e2ffe8',
+      panelBg: 'rgba(11, 34, 21, 0.78)',
+      panelTitle: '#84f2bd',
+      narrative: '#d4ffe5',
+      linkBorder: '#4cb87f',
+      linkBg: '#0f2c1d',
+      linkColor: '#d9ffe5',
+      breadcrumb: '#8ff8c3',
+      placeholder: '#d9ffe5',
+    },
+    ritual: {
+      border: '#d2b56c',
+      articleBg: 'linear-gradient(160deg, #120b04 0%, #26170b 52%, #3f2a16 100%)',
+      articleShadow: '0 0 0 1px #624321 inset, 0 0 34px rgba(223, 187, 104, 0.24)',
+      frameBorder: '#94703a',
+      frameBg: 'radial-gradient(circle at 20% 10%, #ba9650 0%, #47301a 50%, #1a0f08 100%)',
+      label: '#efd9a6',
+      value: '#fff3d3',
+      panelBg: 'rgba(39, 24, 11, 0.76)',
+      panelTitle: '#ffd68e',
+      narrative: '#ffeec2',
+      linkBorder: '#c89f51',
+      linkBg: '#2c1a0e',
+      linkColor: '#ffe7b3',
+      breadcrumb: '#ffd98f',
+      placeholder: '#ffe7b3',
+    },
+    neon: {
+      border: '#4cff8f',
+      articleBg: 'linear-gradient(164deg, #040d10 0%, #0a1d2a 44%, #1a1240 100%)',
+      articleShadow: '0 0 0 1px #345f7a inset, 0 0 34px rgba(76, 255, 143, 0.2)',
+      frameBorder: '#45bb93',
+      frameBg: 'radial-gradient(circle at 22% 11%, #53ffb5 0%, #15374a 45%, #09071a 100%)',
+      label: '#8dffd4',
+      value: '#ddffec',
+      panelBg: 'rgba(8, 27, 38, 0.78)',
+      panelTitle: '#82ffd0',
+      narrative: '#d5ffee',
+      linkBorder: '#42e2ad',
+      linkBg: '#0e2230',
+      linkColor: '#d5ffee',
+      breadcrumb: '#88ffd0',
+      placeholder: '#d5ffee',
+    },
+  };
+  const palette = themes[normalizeXoloArchiveTheme(theme)] || themes.codex;
+  const accentColor = typeof accent === 'string' && accent.trim() ? accent.trim() : palette.border;
+  return {
+    ...palette,
+    border: accentColor,
+    linkBorder: accentColor,
+    breadcrumb: accentColor,
+  };
+}
+
+function buildXoloNftCollectionItems() {
+  return Object.entries(LINAJE_EDITORIAL_META || {})
+    .map(([metaSlug, meta]) => {
+      if (!meta || typeof meta !== 'object') return null;
+
+      const normalizedSlug = slugify(metaSlug || meta.slug || '');
+      const indexedTxid = normalizedSlug ? findLinajeTxidBySlug(normalizedSlug) : '';
+      const tokenIdCandidate = [
+        meta.tokenId,
+        meta.nftTokenId,
+        meta.token?.tokenId,
+        meta.txid,
+        indexedTxid,
+      ].find((value) => isHex64((value || '').toString().trim()));
+      const tokenId = tokenIdCandidate ? tokenIdCandidate.toString().trim().toLowerCase() : '';
+      const title = meta.title || meta.nombreCompleto || normalizedSlug || 'Sin titulo';
+      const subtitle = meta.subtitle && meta.subtitle !== title ? meta.subtitle : '';
+      const narrative = meta.narrative || meta.nota || meta.subtitle || '';
+      const tokenSymbol = meta.tokenSymbol || meta.symbol || meta.tokenTicker || '';
+      const tokenName = meta.tokenName || meta.name || meta.token?.tokenName || '';
+      const lineageRef = normalizedSlug || (isHex64(meta.txid || '') ? meta.txid : '');
+      const theme = normalizeXoloArchiveTheme(meta.theme);
+      const accent = typeof meta.accent === 'string' ? meta.accent.trim() : '';
+      const backgroundNote = typeof meta.backgroundNote === 'string' ? meta.backgroundNote.trim() : '';
+
+      return {
+        id: `${normalizedSlug || tokenId || title}`,
+        title,
+        subtitle,
+        slug: normalizedSlug,
+        tokenId,
+        tokenSymbol,
+        tokenName,
+        narrative,
+        lineageRef,
+        theme,
+        accent,
+        backgroundNote,
+        imageUrl: extractImageLikeField(meta),
+        imageAlt: meta.imageAlt || `Imagen de ${title}`,
+        searchText: `${title} ${subtitle} ${normalizedSlug} ${tokenSymbol} ${tokenName} ${narrative}`.toLowerCase(),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.title.localeCompare(b.title, 'es', { sensitivity: 'base' }));
+}
+
+function NftCollectibleCard({ item }) {
+  const [imageFailed, setImageFailed] = React.useState(false);
+  const primaryTitle = item.symbol || item.name || shortHex(item.tokenId, 10, 8);
+  const secondaryTitle = item.name && item.name !== item.symbol ? item.name : '';
+  const quantityLabel = toBigIntSafe(item.amount) === 1n ? '1 collectible' : `Cantidad: ${item.humanBalance}`;
+  const lineageSlug = typeof item.editorialMeta?.slug === 'string' ? item.editorialMeta.slug.trim() : '';
+  const lineageTxid = typeof item.editorialMeta?.txid === 'string' ? item.editorialMeta.txid.trim() : '';
+  const lineageHref = (lineageSlug || lineageTxid) ? `/linaje/${lineageSlug || lineageTxid}` : '';
+
+  const imageUrl = extractImageLikeField([
+    item.editorialMeta,
+    item.tokenMeta?.genesisInfo,
+    item.tokenMeta,
+  ]);
+  const showImage = Boolean(imageUrl) && !imageFailed;
+  const placeholderText = buildCollectibleInitials(item.symbol || item.name, item.tokenId);
+  const actionLinkStyle = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '5px 9px',
+    fontSize: '0.75rem',
+    lineHeight: 1.2,
+    textDecoration: 'none',
+    border: '1px solid #00eaff',
+    background: '#09181d',
+    color: '#8ff7ff',
+    letterSpacing: '0.03em',
+  };
+
+  return (
+    <div
+      style={{
+        border: '1px solid #1a4e57',
+        background: '#081216',
+        padding: '10px',
+        display: 'grid',
+        gap: '8px',
+      }}
+    >
+      <div
+        style={{
+          border: '1px solid #00eaff',
+          background: 'linear-gradient(160deg, #071117 0%, #0d1d25 100%)',
+          minHeight: '110px',
+          display: 'grid',
+          placeItems: 'center',
+          overflow: 'hidden',
+        }}
+      >
+        {showImage ? (
+          <img
+            src={imageUrl}
+            alt={primaryTitle}
+            loading="lazy"
+            style={{ width: '100%', height: '110px', objectFit: 'cover', display: 'block' }}
+            onError={() => setImageFailed(true)}
+          />
+        ) : (
+          <div style={{ color: '#9feeff', fontWeight: 'bold', letterSpacing: '0.06em' }}>{placeholderText}</div>
+        )}
+      </div>
+
+      <div style={{ color: '#d5fcff', fontWeight: 'bold', wordBreak: 'break-word' }}>{primaryTitle}</div>
+      {secondaryTitle && <div style={{ color: '#8ff7ff', fontSize: '0.82rem', wordBreak: 'break-word' }}>{secondaryTitle}</div>}
+      <div style={{ color: '#9adbe2', fontSize: '0.85rem' }}>{quantityLabel}</div>
+      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+        <Link to={`/token/${item.tokenId}`} style={actionLinkStyle}>
+          Ver Token
+        </Link>
+        {lineageHref && (
+          <Link to={lineageHref} style={actionLinkStyle}>
+            Ver Linaje
+          </Link>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function XoloNftCollectionCard({ item }) {
+  const [imageFailed, setImageFailed] = React.useState(false);
+  const curatedHref = item.slug ? `/collection/xolosnft/${item.slug}` : '';
+  const actionLinkStyle = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '5px 9px',
+    fontSize: '0.75rem',
+    lineHeight: 1.2,
+    textDecoration: 'none',
+    border: '1px solid #00eaff',
+    background: '#09181d',
+    color: '#8ff7ff',
+    letterSpacing: '0.03em',
+  };
+  const showImage = Boolean(item.imageUrl) && !imageFailed;
+  const placeholderText = buildCollectibleInitials(item.title, item.tokenId || item.slug);
+  const primaryContent = (
+    <>
+      <div
+        style={{
+          border: '1px solid #00eaff',
+          background: 'linear-gradient(160deg, #071117 0%, #0d1d25 100%)',
+          minHeight: '120px',
+          display: 'grid',
+          placeItems: 'center',
+          overflow: 'hidden',
+        }}
+      >
+        {showImage ? (
+          <img
+            src={item.imageUrl}
+            alt={item.imageAlt || item.title}
+            loading="lazy"
+            style={{ width: '100%', height: '120px', objectFit: 'cover', display: 'block' }}
+            onError={() => setImageFailed(true)}
+          />
+        ) : (
+          <div style={{ color: '#9feeff', fontWeight: 'bold', letterSpacing: '0.06em' }}>{placeholderText}</div>
+        )}
+      </div>
+
+      <div style={{ color: '#d5fcff', fontWeight: 'bold', wordBreak: 'break-word' }}>{item.title}</div>
+      {item.subtitle && (
+        <div style={{ color: '#99edf5', fontSize: '0.86rem', fontStyle: 'italic', lineHeight: 1.45 }}>{item.subtitle}</div>
+      )}
+      {item.tokenSymbol && (
+        <div style={{ color: '#8ff7ff', fontSize: '0.82rem', wordBreak: 'break-word' }}>
+          {item.tokenSymbol}
+        </div>
+      )}
+      {item.narrative && (
+        <div style={{ color: '#9adbe2', fontSize: '0.85rem', lineHeight: 1.4 }}>{item.narrative}</div>
+      )}
+      {item.slug && <div style={{ color: '#78cad2', fontSize: '0.8rem' }}>Slug: {item.slug}</div>}
+      <div style={{ color: '#7dffe4', fontSize: '0.82rem', letterSpacing: '0.04em' }}>Abrir ficha curada →</div>
+    </>
+  );
+
+  return (
+    <article
+      style={{
+        border: '1px solid #1a4e57',
+        background: '#081216',
+        padding: '10px',
+        display: 'grid',
+        gap: '8px',
+      }}
+    >
+      {curatedHref ? (
+        <Link to={curatedHref} style={{ display: 'grid', gap: '8px', textDecoration: 'none' }}>
+          {primaryContent}
+        </Link>
+      ) : primaryContent}
+
+      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+        {item.tokenId && (
+          <Link to={`/token/${item.tokenId}`} style={actionLinkStyle}>
+            Token tecnico
+          </Link>
+        )}
+        {item.lineageRef && (
+          <Link to={`/linaje/${item.lineageRef}`} style={actionLinkStyle}>
+            Ver Linaje
+          </Link>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function XoloNftCollectionPage() {
+  const [query, setQuery] = React.useState('');
+
+  const collectionItems = React.useMemo(() => buildXoloNftCollectionItems(), []);
+
+  const filteredItems = React.useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) return collectionItems;
+    return collectionItems.filter((item) => item.searchText.includes(normalizedQuery));
+  }, [collectionItems, query]);
+
+  return (
+    <Shell>
+      <SearchBar />
+      <SectionTitle>XOLOSNFT Collection</SectionTitle>
+      <div style={{ color: '#8ff7ff', marginTop: '-4px', marginBottom: '10px' }}>
+        Archivo curado del Linaje Vivo
+      </div>
+      <div style={{ marginTop: '-2px', marginBottom: '12px' }}>
+        <Link to="/collection/xolosnft/codex" style={{ color: '#7dffe4', fontSize: '0.9rem' }}>
+          Vista códice
+        </Link>
+      </div>
+
+      <Box style={{ marginBottom: '14px' }}>
+        <p style={{ marginTop: 0, color: '#9adbe2', lineHeight: 1.5 }}>
+          Seleccion editorial de NFTs y fichas narrativas del archivo XOLOSNFT. Esta vista reúne metadatos locales de
+          linaje para explorar piezas con contexto tecnico y genealogico.
+        </p>
+        <label style={{ display: 'grid', gap: '6px', color: '#8ff7ff', fontSize: '0.85rem' }}>
+          Buscar en coleccion
+          <input
+            type="text"
+            placeholder="Nombre, slug o simbolo..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            style={{
+              background: '#081316',
+              border: '1px solid #1c515b',
+              color: '#d6ffff',
+              padding: '8px 10px',
+              fontFamily: 'monospace',
+            }}
+          />
+        </label>
+      </Box>
+
+      {filteredItems.length === 0 ? (
+        <Box>No hay elementos disponibles en la colección XOLOSNFT.</Box>
+      ) : (
+        <div style={{ display: 'grid', gap: '10px', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))' }}>
+          {filteredItems.map((item) => (
+            <XoloNftCollectionCard key={item.id} item={item} />
+          ))}
+        </div>
+      )}
+    </Shell>
+  );
+}
+
+function XoloNftCodexCard({ item }) {
+  const [imageFailed, setImageFailed] = React.useState(false);
+  const curatedHref = item.slug ? `/collection/xolosnft/${item.slug}` : '';
+  const showImage = Boolean(item.imageUrl) && !imageFailed;
+  const placeholderText = buildCollectibleInitials(item.title, item.tokenId || item.slug);
+  const actionLinkStyle = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '7px 11px',
+    fontSize: '0.8rem',
+    lineHeight: 1.2,
+    textDecoration: 'none',
+    border: '1px solid #2abfce',
+    background: '#0a1c22',
+    color: '#b4fbff',
+    letterSpacing: '0.02em',
+  };
+  const primaryContent = (
+    <>
+      <div
+        style={{
+          minHeight: '220px',
+          borderBottom: '1px solid #1b5f6a',
+          background: 'radial-gradient(circle at 15% 20%, #185b66 0%, #0b1b23 46%, #061015 100%)',
+          display: 'grid',
+          placeItems: 'center',
+          overflow: 'hidden',
+        }}
+      >
+        {showImage ? (
+          <img
+            src={item.imageUrl}
+            alt={item.imageAlt || item.title}
+            loading="lazy"
+            style={{ width: '100%', minHeight: '220px', maxHeight: '320px', objectFit: 'cover', display: 'block' }}
+            onError={() => setImageFailed(true)}
+          />
+        ) : (
+          <div style={{ color: '#9feeff', fontWeight: 'bold', letterSpacing: '0.12em', fontSize: '1.25rem' }}>
+            {placeholderText}
+          </div>
+        )}
+      </div>
+
+      <div style={{ padding: '16px' }}>
+        <div style={{ color: '#8ff7ff', fontSize: '0.76rem', letterSpacing: '0.11em', textTransform: 'uppercase' }}>
+          Archivo del Linaje Vivo
+        </div>
+        <h3 style={{ margin: '8px 0 0', color: '#dcfdff', fontSize: '1.55rem', lineHeight: 1.15 }}>
+          {item.title}
+        </h3>
+        {item.subtitle && (
+          <div style={{ marginTop: '8px', color: '#b0eef4', fontSize: '0.93rem', fontStyle: 'italic', lineHeight: 1.45 }}>
+            {item.subtitle}
+          </div>
+        )}
+        {item.tokenSymbol && (
+          <div style={{ marginTop: '8px', color: '#9aeaf2', fontSize: '0.9rem' }}>
+            {item.tokenSymbol}
+          </div>
+        )}
+        <div style={{ marginTop: '10px', color: '#b9f4f9', lineHeight: 1.5, minHeight: '56px' }}>
+          {item.narrative || 'Pieza del archivo editorial XOLOSNFT con referencia al linaje vivo.'}
+        </div>
+        {item.slug && <div style={{ marginTop: '10px', color: '#7bcfd8', fontSize: '0.84rem' }}>Clave: {item.slug}</div>}
+        <div style={{ marginTop: '10px', color: '#7dffe4', fontSize: '0.85rem', letterSpacing: '0.03em' }}>
+          Abrir entrada de archivo →
+        </div>
+      </div>
+    </>
+  );
+
+  return (
+    <article
+      style={{
+        border: '1px solid #00eaff',
+        background: 'linear-gradient(160deg, #050d12 0%, #0a1a22 48%, #0d2731 100%)',
+        boxShadow: '0 0 0 1px #103d46 inset, 0 0 26px rgba(0, 234, 255, 0.16)',
+        display: 'grid',
+        overflow: 'hidden',
+      }}
+    >
+      {curatedHref ? (
+        <Link to={curatedHref} style={{ display: 'grid', textDecoration: 'none' }}>
+          {primaryContent}
+        </Link>
+      ) : primaryContent}
+      <div style={{ padding: '0 16px 16px' }}>
+        <div style={{ marginTop: '2px', display: 'flex', gap: '9px', flexWrap: 'wrap' }}>
+          {item.tokenId && (
+            <Link to={`/token/${item.tokenId}`} style={actionLinkStyle}>
+              Ver token
+            </Link>
+          )}
+          {item.lineageRef && (
+            <Link to={`/linaje/${item.lineageRef}`} style={actionLinkStyle}>
+              Ver linaje
+            </Link>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function XoloNftCodexPage() {
+  const [query, setQuery] = React.useState('');
+  const collectionItems = React.useMemo(() => buildXoloNftCollectionItems(), []);
+  const filteredItems = React.useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) return collectionItems;
+    return collectionItems.filter((item) => item.searchText.includes(normalizedQuery));
+  }, [collectionItems, query]);
+
+  return (
+    <Shell>
+      <SearchBar />
+      <SectionTitle>XOLOSNFT Codex</SectionTitle>
+      <div style={{ color: '#8ff7ff', marginTop: '-4px', marginBottom: '10px' }}>
+        Museo digital del Archivo del Linaje Vivo
+      </div>
+      <div style={{ marginTop: '-2px', marginBottom: '12px' }}>
+        <Link to="/collection/xolosnft" style={{ color: '#7dffe4', fontSize: '0.9rem' }}>
+          Vista explorador
+        </Link>
+      </div>
+
+      <Box style={{ marginBottom: '14px', background: 'linear-gradient(160deg, #08151b 0%, #0b1f29 100%)' }}>
+        <p style={{ marginTop: 0, color: '#b9f4f9', lineHeight: 1.55 }}>
+          Este códice reúne piezas de XOLOSNFT como una sala curatorial: cada obra dialoga con el linaje, su memoria
+          editorial y su rastro on-chain dentro del archivo vivo.
+        </p>
+        <label style={{ display: 'grid', gap: '6px', color: '#8ff7ff', fontSize: '0.85rem' }}>
+          Buscar en códice
+          <input
+            type="text"
+            placeholder="Nombre, slug o símbolo..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            style={{
+              background: '#081316',
+              border: '1px solid #1c515b',
+              color: '#d6ffff',
+              padding: '8px 10px',
+              fontFamily: 'monospace',
+            }}
+          />
+        </label>
+      </Box>
+
+      {filteredItems.length === 0 ? (
+        <Box>No hay elementos disponibles en el códice XOLOSNFT.</Box>
+      ) : (
+        <div style={{ display: 'grid', gap: '14px', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' }}>
+          {filteredItems.map((item) => (
+            <XoloNftCodexCard key={item.id} item={item} />
+          ))}
+        </div>
+      )}
+    </Shell>
+  );
+}
+
+function XoloNftCollectionItemPage() {
+  const { slug } = useParams();
+  const collectionItems = React.useMemo(() => buildXoloNftCollectionItems(), []);
+  const normalizedSlug = slugify((slug || '').trim());
+  const item = React.useMemo(
+    () => collectionItems.find((entry) => entry.slug === normalizedSlug),
+    [collectionItems, normalizedSlug],
+  );
+  const actionLinkStyle = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '7px 11px',
+    fontSize: '0.82rem',
+    lineHeight: 1.2,
+    textDecoration: 'none',
+    border: '1px solid #2abfce',
+    background: '#0a1c22',
+    color: '#b4fbff',
+    letterSpacing: '0.02em',
+  };
+  const metaLabelStyle = {
+    color: '#79ced6',
+    fontSize: '0.8rem',
+    letterSpacing: '0.06em',
+    textTransform: 'uppercase',
+  };
+  const metaValueStyle = {
+    color: '#d7fbff',
+    wordBreak: 'break-word',
+  };
+
+  if (!item) {
+    return (
+      <Shell>
+        <SearchBar />
+        <SectionTitle>XOLOSNFT Entry</SectionTitle>
+        <Box>No se encontró esta pieza dentro de la colección XOLOSNFT.</Box>
+      </Shell>
+    );
+  }
+
+  const tokenLabel = [item.tokenSymbol, item.tokenName].filter(Boolean).join(' / ') || '—';
+  const lineageHref = item.lineageRef ? `/linaje/${item.lineageRef}` : '';
+  const themeStyles = buildXoloArchiveThemeStyles(item.theme, item.accent);
+  const resolvedActionLinkStyle = {
+    ...actionLinkStyle,
+    border: `1px solid ${themeStyles.linkBorder}`,
+    background: themeStyles.linkBg,
+    color: themeStyles.linkColor,
+  };
+  const resolvedMetaLabelStyle = { ...metaLabelStyle, color: themeStyles.label };
+  const resolvedMetaValueStyle = { ...metaValueStyle, color: themeStyles.value };
+
+  return (
+    <Shell>
+      <SearchBar />
+      <SectionTitle>{item.title}</SectionTitle>
+      {item.subtitle && (
+        <div style={{ marginTop: '-4px', marginBottom: '10px', color: '#99edf5', fontStyle: 'italic', lineHeight: 1.45 }}>
+          {item.subtitle}
+        </div>
+      )}
+      <div style={{ marginBottom: '14px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+        <Link to="/collection/xolosnft" style={{ color: themeStyles.breadcrumb, fontSize: '0.9rem' }}>
+          Volver a la colección
+        </Link>
+        <Link to="/collection/xolosnft/codex" style={{ color: themeStyles.breadcrumb, fontSize: '0.9rem' }}>
+          Vista códice
+        </Link>
+      </div>
+
+      <article
+        style={{
+          border: `1px solid ${themeStyles.border}`,
+          background: themeStyles.articleBg,
+          boxShadow: themeStyles.articleShadow,
+          display: 'grid',
+          gap: '14px',
+          padding: '14px',
+        }}
+      >
+        <div
+          style={{
+            border: `1px solid ${themeStyles.frameBorder}`,
+            minHeight: '320px',
+            background: themeStyles.frameBg,
+            display: 'grid',
+            placeItems: 'center',
+            overflow: 'hidden',
+          }}
+        >
+          {item.imageUrl ? (
+            <img
+              src={item.imageUrl}
+              alt={item.imageAlt || item.title}
+              style={{ width: '100%', minHeight: '320px', maxHeight: '520px', objectFit: 'cover', display: 'block' }}
+            />
+          ) : (
+            <div style={{ color: themeStyles.placeholder, fontWeight: 'bold', letterSpacing: '0.12em', fontSize: '1.5rem' }}>
+              {buildCollectibleInitials(item.title, item.tokenId || item.slug)}
+            </div>
+          )}
+        </div>
+
+        <Box style={{ background: themeStyles.panelBg }}>
+          <div style={{ color: themeStyles.panelTitle, fontSize: '0.78rem', letterSpacing: '0.11em', textTransform: 'uppercase' }}>
+            Entrada curada
+          </div>
+          <div style={{ marginTop: '10px', color: themeStyles.narrative, lineHeight: 1.65 }}>
+            {item.narrative || 'Registro editorial del archivo XOLOSNFT, vinculado al linaje vivo y a su rastro on-chain.'}
+          </div>
+          {item.backgroundNote && (
+            <div style={{ marginTop: '10px', color: themeStyles.value, lineHeight: 1.55, fontSize: '0.92rem' }}>
+              {item.backgroundNote}
+            </div>
+          )}
+        </Box>
+
+        <Box style={{ background: themeStyles.panelBg }}>
+          <div style={{ display: 'grid', gap: '10px' }}>
+            <div>
+              <div style={resolvedMetaLabelStyle}>Slug</div>
+              <div style={resolvedMetaValueStyle}>{item.slug || '—'}</div>
+            </div>
+            <div>
+              <div style={resolvedMetaLabelStyle}>Token símbolo / nombre</div>
+              <div style={resolvedMetaValueStyle}>{tokenLabel}</div>
+            </div>
+            <div>
+              <div style={resolvedMetaLabelStyle}>Token ID</div>
+              <div style={resolvedMetaValueStyle}>{item.tokenId || '—'}</div>
+            </div>
+            <div>
+              <div style={resolvedMetaLabelStyle}>Destino de linaje</div>
+              <div style={resolvedMetaValueStyle}>{item.lineageRef || '—'}</div>
+            </div>
+            <div>
+              <div style={resolvedMetaLabelStyle}>Tema editorial</div>
+              <div style={resolvedMetaValueStyle}>{item.theme || 'codex'}</div>
+            </div>
+          </div>
+        </Box>
+
+        <div style={{ display: 'flex', gap: '9px', flexWrap: 'wrap' }}>
+          {item.tokenId && (
+            <Link to={`/token/${item.tokenId}`} style={resolvedActionLinkStyle}>
+              Ver token
+            </Link>
+          )}
+          {lineageHref && (
+            <Link to={lineageHref} style={resolvedActionLinkStyle}>
+              Ver linaje
+            </Link>
+          )}
+          <Link to="/collection/xolosnft" style={resolvedActionLinkStyle}>
+            Volver a la colección
+          </Link>
+          <Link to="/collection/xolosnft/codex" style={resolvedActionLinkStyle}>
+            Vista códice
+          </Link>
+        </div>
+      </article>
+    </Shell>
+  );
+}
+
 function TxTable({ txs = [] }) {
   if (!txs.length) return <Box>No hay transacciones.</Box>;
 
@@ -881,32 +1694,63 @@ function TxTable({ txs = [] }) {
 }
 
 function TokenBalancesCard({ balances = [] }) {
+  const fungible = balances.filter((item) => item.kind === 'fungible');
+  const nfts = balances.filter((item) => item.kind === 'nft');
+
   return (
-    <Box style={{ overflowX: 'auto' }}>
-      <div style={{ fontWeight: 'bold', marginBottom: '10px' }}>Token Balances</div>
-      {!balances.length ? (
-        <div style={{ color: '#8ff7ff' }}>No hay tokens detectados.</div>
-      ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr>
-              <th style={thStyle}>Token ID</th>
-              <th style={thStyle}>Token Symbol</th>
-              <th style={thStyle}>Balance</th>
-            </tr>
-          </thead>
-          <tbody>
-            {balances.map((item) => (
-              <tr key={item.tokenId}>
-                <td style={tdStyle}><TokenLink tokenId={item.tokenId}>{shortHex(item.tokenId, 18, 14)}</TokenLink></td>
-                <td style={tdStyle}>{item.symbol || '—'}</td>
-                <td style={tdStyle}>{formatTokenAmount(item.amount)}</td>
+    <div style={{ marginTop: '24px', display: 'grid', gap: '14px' }}>
+      <Box style={{ overflowX: 'auto' }}>
+        <div style={{ fontWeight: 'bold', marginBottom: '10px' }}>Fungible Tokens</div>
+        {!fungible.length ? (
+          <div style={{ color: '#8ff7ff' }}>No hay fungibles detectados en UTXOs activos.</div>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <th style={thStyle}>Token</th>
+                <th style={thStyle}>Balance</th>
+                <th style={thStyle}>Token ID</th>
               </tr>
+            </thead>
+            <tbody>
+              {fungible.map((item) => (
+                <tr key={item.tokenId}>
+                  <td style={tdStyle}>
+                    <div style={{ color: '#d5fcff' }}>{item.symbol || item.name || '—'}</div>
+                    {item.name && <div style={{ color: '#8ff7ff', fontSize: '0.82rem' }}>{item.name}</div>}
+                  </td>
+                  <td style={tdStyle}>
+                    <div>{item.humanBalance}</div>
+                    <div style={{ color: '#77aeb6', fontSize: '0.8rem', marginTop: '4px' }}>raw: {item.rawBalance}</div>
+                  </td>
+                  <td style={tdStyle}>
+                    <TokenLink tokenId={item.tokenId}>{shortHex(item.tokenId, 18, 14)}</TokenLink>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Box>
+
+      <Box>
+        <div style={{ fontWeight: 'bold', marginBottom: '10px' }}>NFTs / Collectibles</div>
+        {!nfts.length ? (
+          <div style={{ color: '#8ff7ff' }}>No hay NFTs o coleccionables detectados.</div>
+        ) : (
+          <div style={{ display: 'grid', gap: '10px', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))' }}>
+            {nfts.map((item) => (
+              <NftCollectibleCard key={item.tokenId} item={item} />
             ))}
-          </tbody>
-        </table>
+          </div>
+        )}
+      </Box>
+      {!balances.length && (
+        <Box>
+          <div style={{ color: '#8ff7ff' }}>No hay tokens detectados.</div>
+        </Box>
       )}
-    </Box>
+    </div>
   );
 }
 
@@ -1003,6 +1847,15 @@ function InputsTable({ inputs = [] }) {
 function HomePage() {
   return (
     <Shell>
+      <div style={{ marginBottom: '20px' }}>
+        <h1 style={{ fontSize: '2.5rem', marginBottom: '8px' }}>XOLOS EXPLORER</h1>
+        <p style={{ color: '#8ff7ff', marginBottom: '16px' }}>
+          Explorador mínimo avanzado conectado a tu Chronik soberano
+        </p>
+        <Box style={{ marginBottom: '16px' }}>
+          <div><strong>Endpoint:</strong> {CHRONIK_URL}</div>
+        </Box>
+      </div>
       <SearchBar />
       <StatGrid
         items={[
@@ -1011,6 +1864,75 @@ function HomePage() {
           { label: 'Bloque ejemplo', value: <Link to="/block/9000" style={{ color: '#00eaff' }}>/block/9000</Link> },
         ]}
       />
+      <div
+        style={{
+          marginTop: '18px',
+          padding: '10px 12px',
+          border: '1px solid #1f464d',
+          background: '#081216',
+          color: '#78cad2',
+          fontSize: '0.88rem',
+        }}
+      >
+        Explora el ecosistema cultural y blockchain de XolosArmy:{' '}
+        <a
+          href="https://xolosarmy.xyz"
+          target="_blank"
+          rel="noreferrer"
+          style={{ color: '#8de6ef', textDecoration: 'none' }}
+        >
+          más sobre el proyecto →
+        </a>
+      </div>
+    </Shell>
+  );
+}
+
+function StatusPage() {
+  const [state, setState] = React.useState({ loading: true, error: '', info: null });
+
+  React.useEffect(() => {
+    let mounted = true;
+    async function load() {
+      try {
+        setState({ loading: true, error: '', info: null });
+        const info = await chronik.blockchainInfo();
+        if (mounted) setState({ loading: false, error: '', info });
+      } catch (err) {
+        if (mounted) setState({ loading: false, error: err?.message || 'No se pudo cargar el estado del nodo.', info: null });
+      }
+    }
+    load();
+    return () => { mounted = false; };
+  }, []);
+
+  const info = state.info || {};
+
+  return (
+    <Shell>
+      <SearchBar />
+      <SectionTitle>Estado del Nodo</SectionTitle>
+      {state.loading && <LoadingBox text="Consultando Chronik..." />}
+      {state.error && <ErrorBox error={state.error} />}
+      {state.info && (
+        <>
+          <StatGrid
+            items={[
+              { label: 'Altura actual', value: formatNumber(info.tipHeight) },
+              { label: 'Tip hash', value: info.tipHash || '—' },
+              { label: 'Estado', value: 'Online' },
+            ]}
+          />
+          <Box style={{ marginTop: '14px' }}>
+            <div style={{ color: '#8ff7ff', marginBottom: '6px' }}>Network Status</div>
+            <div><strong>Endpoint:</strong> {CHRONIK_URL}</div>
+            <div style={{ marginTop: '6px' }}>
+              Nodo sincronizado hasta altura <strong>{formatNumber(info.tipHeight)}</strong> con tip{' '}
+              <span style={{ color: '#bffbff' }}>{shortHex(info.tipHash, 20, 16)}</span>.
+            </div>
+          </Box>
+        </>
+      )}
     </Shell>
   );
 }
@@ -1684,12 +2606,46 @@ function AddressPage() {
     return Array.from(balances.entries())
       .map(([tokenId, amount]) => {
         const tokenMeta = tokenInfoById[tokenId];
+        const editorialMeta = resolveLinajeMeta({ txid: tokenId });
         const isRmz = tokenId.toLowerCase() === RMZ_TOKEN_ID;
         const symbol = isRmz ? 'RMZ' : (tokenMeta?.tokenTicker || tokenMeta?.genesisInfo?.tokenTicker || '');
-        return { tokenId, amount, symbol };
+        const name = tokenMeta?.tokenName || tokenMeta?.genesisInfo?.tokenName || '';
+        const decimals = Number(tokenMeta?.decimals ?? tokenMeta?.genesisInfo?.decimals ?? 0);
+
+        // NFT heuristic: explicit metadata hints win; otherwise, default 0-decimals + single-unit balances to collectibles.
+        const typeHints = [
+          tokenMeta?.tokenType,
+          tokenMeta?.genesisInfo?.tokenType,
+          tokenMeta?.tokenTicker,
+          tokenMeta?.tokenName,
+          tokenMeta?.genesisInfo?.tokenTicker,
+          tokenMeta?.genesisInfo?.tokenName,
+        ]
+          .filter(Boolean)
+          .map((v) => String(v).toLowerCase())
+          .join(' ');
+        const hasNftHint = /nft|collectible|collection|artifact|child/.test(typeHints);
+        const isLikelyNft = !isRmz && (hasNftHint || (decimals === 0 && toBigIntSafe(amount) === 1n));
+
+        return {
+          tokenId,
+          amount,
+          symbol,
+          name,
+          decimals,
+          tokenMeta,
+          editorialMeta,
+          humanBalance: formatTokenAmountWithDecimals(amount, decimals),
+          rawBalance: formatTokenAmount(amount),
+          kind: isLikelyNft ? 'nft' : 'fungible',
+        };
       })
-      .sort((a, b) => (a.amount > b.amount ? -1 : 1));
-  }, [txs, tokenInfoById]);
+      .sort((a, b) => {
+        if (a.kind !== b.kind) return a.kind === 'fungible' ? -1 : 1;
+        if (a.amount === b.amount) return a.tokenId.localeCompare(b.tokenId);
+        return a.amount > b.amount ? -1 : 1;
+      });
+  }, [utxos, tokenInfoById]);
 
   return (
     <Shell>
@@ -1827,6 +2783,13 @@ export default function App() {
         <Route path="/explorer" element={<ExplorerPage />} />
         <Route path="/linaje" element={<LinajePage />} />
         <Route path="/linaje/:txidOrSlug" element={<LinajeRecordPage />} />
+        <Route path="/collection/xolosnft" element={<XoloNftCollectionPage />} />
+        <Route path="/coleccion/xolosnft" element={<XoloNftCollectionPage />} />
+        <Route path="/collection/xolosnft/codex" element={<XoloNftCodexPage />} />
+        <Route path="/coleccion/xolosnft/codice" element={<XoloNftCodexPage />} />
+        <Route path="/collection/xolosnft/:slug" element={<XoloNftCollectionItemPage />} />
+        <Route path="/coleccion/xolosnft/:slug" element={<XoloNftCollectionItemPage />} />
+        <Route path="/status" element={<StatusPage />} />
         <Route path="/block/:height" element={<BlockPage />} />
         <Route path="/tx/:txid" element={<TxPage />} />
         <Route path="/address/:address" element={<AddressPage />} />

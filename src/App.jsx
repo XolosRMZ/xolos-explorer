@@ -201,6 +201,64 @@ function normalizeMetadataTags(input) {
   return [];
 }
 
+function normalizeMetadataFieldKey(value) {
+  if (value === undefined || value === null) return '';
+  return String(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function canonicalMetadataFieldKey(value) {
+  const normalized = normalizeMetadataFieldKey(value);
+  if (!normalized) return '';
+  const compact = normalized.replace(/\s+/g, '');
+  const aliasMap = {
+    parent: 'padre',
+    registrofcm: 'registro fcm',
+    registrofederacioncaninamexicana: 'registro fcm',
+    microchipid: 'microchip',
+  };
+  return aliasMap[compact] || normalized;
+}
+
+function hasRenderableMetadataValue(value) {
+  if (!hasMeaningfulValue(value)) return false;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return Boolean(trimmed) && trimmed !== '—';
+  }
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+}
+
+function formatMetadataAttributeValue(value) {
+  if (value === undefined || value === null) return '';
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => {
+        if (entry === undefined || entry === null) return '';
+        if (typeof entry === 'object') return '';
+        return String(entry).trim();
+      })
+      .filter(Boolean)
+      .join(', ');
+  }
+  if (typeof value === 'object') {
+    try {
+      const keys = Object.keys(value);
+      if (!keys.length) return '';
+      return safeStringify(value);
+    } catch {
+      return '';
+    }
+  }
+  return String(value).trim();
+}
+
 function buildEmptyIpfsState(tokenId = '', documentUrl = '') {
   return {
     ok: false,
@@ -3169,6 +3227,61 @@ function TokenPage() {
     onchain: [],
     fallback: [],
   });
+  // Root metadata fields are rendered first; standard NFT attributes are rendered second.
+  // Attribute rows are filtered when they duplicate a root field already shown with a real value.
+  const renderedRootMetadataKeys = React.useMemo(() => {
+    const keys = new Set();
+    const maybeAdd = (fieldName, fieldValue, aliases = []) => {
+      if (!hasRenderableMetadataValue(fieldValue)) return;
+      const normalizedField = canonicalMetadataFieldKey(fieldName);
+      if (normalizedField) keys.add(normalizedField);
+      aliases.forEach((alias) => {
+        const normalizedAlias = canonicalMetadataFieldKey(alias);
+        if (normalizedAlias) keys.add(normalizedAlias);
+      });
+    };
+    maybeAdd('name', resolvedName.value);
+    maybeAdd('description', resolvedDescription.value);
+    maybeAdd('etapa', resolvedEtapa.value);
+    maybeAdd('padre', resolvedPadre.value, ['parent']);
+    maybeAdd('madre', resolvedMadre.value);
+    maybeAdd('camada', resolvedCamada.value);
+    maybeAdd('registroFCM', resolvedRegistroFCM.value, ['registro fcm']);
+    maybeAdd('microchip', resolvedMicrochip.value);
+    maybeAdd('theme', resolvedTheme.value);
+    maybeAdd('tags', resolvedTags.value);
+    return keys;
+  }, [
+    resolvedName.value,
+    resolvedDescription.value,
+    resolvedEtapa.value,
+    resolvedPadre.value,
+    resolvedMadre.value,
+    resolvedCamada.value,
+    resolvedRegistroFCM.value,
+    resolvedMicrochip.value,
+    resolvedTheme.value,
+    resolvedTags.value,
+  ]);
+  const filteredIpfsAttributes = React.useMemo(() => {
+    if (!Array.isArray(ipfsMeta?.attributes)) return [];
+    const seenTraits = new Set();
+    return ipfsMeta.attributes
+      .map((attr) => {
+        if (!attr || typeof attr !== 'object') return null;
+        const traitType = String(attr.trait_type || '').trim();
+        if (!traitType) return null;
+        const valueText = formatMetadataAttributeValue(attr.value);
+        if (!valueText) return null;
+        const normalizedTrait = canonicalMetadataFieldKey(traitType);
+        if (!normalizedTrait) return null;
+        if (renderedRootMetadataKeys.has(normalizedTrait)) return null;
+        if (seenTraits.has(normalizedTrait)) return null;
+        seenTraits.add(normalizedTrait);
+        return { traitType, valueText };
+      })
+      .filter(Boolean);
+  }, [ipfsMeta, renderedRootMetadataKeys]);
   const preferredSource = [
     resolvedName,
     resolvedDescription,
@@ -3300,6 +3413,16 @@ function TokenPage() {
                 {resolvedTags.value.length ? resolvedTags.value.join(', ') : '—'}
               </div>
             </div>
+            {filteredIpfsAttributes.length > 0 && (
+              <div style={{ marginTop: '12px', display: 'grid', gap: '7px' }}>
+                <div style={{ color: '#8ff7ff', fontWeight: 'bold' }}>Atributos</div>
+                {filteredIpfsAttributes.map((attribute) => (
+                  <div key={attribute.traitType}>
+                    <strong style={{ color: '#8ff7ff' }}>{attribute.traitType}:</strong> {attribute.valueText}
+                  </div>
+                ))}
+              </div>
+            )}
           </Box>
 
           <SectionTitle>Integridad de metadata</SectionTitle>

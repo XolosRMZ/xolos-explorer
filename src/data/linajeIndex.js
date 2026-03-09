@@ -3,7 +3,8 @@ const LINAGE_INDEX_VERSION = '2026-03-07';
 // Índice local persistente: slug -> txid.
 // Mantén este archivo en control de versiones para resolución estable.
 export const LINAJE_SLUG_INDEX = Object.freeze({
-  // 'tika-ramirez': '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+  'tomate-ramirez': 'cc43d40fa21304cfde5271a2f897fc0deff14c4854fa2b8f9f58c5a0ab4b171a',
+  'frida-ramirez': '70a3b2dbfcf0c4891a5c27a83b1b52cb0a920f10a1720c506ff1849ed2e9bfa4',
 });
 
 function normalizeSlugKey(slug) {

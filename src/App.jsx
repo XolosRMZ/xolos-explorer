@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { BrowserRouter, Link, NavLink, Routes, Route, useNavigate, useParams } from 'react-router-dom';
 import { ChronikClient } from 'chronik-client';
 import * as ecashaddr from 'ecashaddrjs';
-import { findLinajeTxidBySlug } from './data/linajeIndex';
+import { LINAJE_SLUG_INDEX, findLinajeTxidBySlug } from './data/linajeIndex';
 import { LINAJE_EDITORIAL_META, resolveLinajeMeta } from './data/linajeMeta';
 import { XoloCard } from './components/XoloCard';
 import {
@@ -171,6 +171,414 @@ function slugify(value) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
+}
+
+function normalizeArchiveNameKey(value) {
+  if (!value || typeof value !== 'string') return '';
+
+  const normalized = value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+
+  if (!normalized) return '';
+
+  const compacted = normalized
+    .replace(/[()[\]{}]/g, ' ')
+    .replace(/[/'".,;:!?#&+*_\\|-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!compacted) return '';
+
+  const tokens = compacted
+    .split(' ')
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+  const dedupedTokens = tokens.filter((token, index) => token !== tokens[index - 1]);
+  const stopTokens = new Set(['mex', 'mexico', 'mx']);
+
+  while (dedupedTokens.length > 1 && stopTokens.has(dedupedTokens[dedupedTokens.length - 1])) {
+    dedupedTokens.pop();
+  }
+
+  return dedupedTokens.join(' ').trim();
+}
+
+function buildArchiveNameVariants(value) {
+  if (!value || typeof value !== 'string') return [];
+
+  const variants = new Set();
+  const register = (candidate) => {
+    const normalized = normalizeArchiveNameKey(candidate);
+    if (normalized) variants.add(normalized);
+  };
+
+  register(value);
+  register(value.replace(/\([^)]*\)/g, ' '));
+  register(value.replace(/\[[^\]]*\]/g, ' '));
+  register(value.replace(/\{[^}]*\}/g, ' '));
+  register(value.replace(/[\(\[\{].*$/, ' '));
+  register(value.replace(/\([^)]*\)/g, ' ').replace(/\b(?:mex|mexico|mx)\.?$/i, ' '));
+  register(slugify(value).replace(/-/g, ' '));
+
+  return Array.from(variants);
+}
+
+function collectEditorialNameFields(meta = {}) {
+  return [
+    meta.title,
+    meta.nombreCompleto,
+    meta.name,
+    meta.nombre,
+    meta.slug,
+    meta.afijo ? `${meta.title || meta.nombreCompleto || meta.name || ''} ${meta.afijo}` : '',
+    ...(Array.isArray(meta.aliases) ? meta.aliases : []),
+    ...(Array.isArray(meta.alias) ? meta.alias : []),
+    ...(Array.isArray(meta.nombres) ? meta.nombres : []),
+    ...(Array.isArray(meta.nombresAlternos) ? meta.nombresAlternos : []),
+    ...(Array.isArray(meta.nombresAlternativos) ? meta.nombresAlternativos : []),
+    ...(Array.isArray(meta.knownNames) ? meta.knownNames : []),
+  ].filter((entry) => typeof entry === 'string' && entry.trim());
+}
+
+function buildLinajeArchiveNameLookup() {
+  const lookup = new Map();
+
+  Object.entries(LINAJE_EDITORIAL_META || {}).forEach(([metaSlug, meta]) => {
+    if (!meta || typeof meta !== 'object') return;
+
+    const slug = slugify(meta.slug || metaSlug || '');
+    const indexedTxid = slug ? (LINAJE_SLUG_INDEX[slug] || '') : '';
+    const txidCandidate = [meta.txid, meta.tokenId, meta.nftTokenId, indexedTxid]
+      .find((value) => isHex64((value || '').toString().trim()));
+    const txid = txidCandidate ? txidCandidate.toString().trim().toLowerCase() : '';
+    const lineageRef = slug || txid;
+
+    if (!lineageRef) return;
+
+    const entry = {
+      slug,
+      txid,
+      lineageHref: `/linaje/${lineageRef}`,
+      collectionHref: slug ? `/collection/xolosnft/${slug}` : '',
+      title: meta.title || meta.nombreCompleto || meta.name || slug || txid,
+    };
+
+    const names = new Set();
+    if (slug) names.add(slug.replace(/-/g, ' '));
+    collectEditorialNameFields(meta).forEach((name) => {
+      buildArchiveNameVariants(name).forEach((variant) => names.add(variant));
+    });
+
+    names.forEach((name) => {
+      const normalized = normalizeArchiveNameKey(name);
+      if (normalized && !lookup.has(normalized)) {
+        lookup.set(normalized, entry);
+      }
+    });
+  });
+
+  return lookup;
+}
+
+const LINAJE_ARCHIVE_NAME_LOOKUP = buildLinajeArchiveNameLookup();
+
+function findLinajeSlugByTokenId(tokenId) {
+  const normalizedTokenId = (tokenId || '').toString().trim().toLowerCase();
+  if (!normalizedTokenId) return '';
+
+  return Object.entries(LINAJE_SLUG_INDEX || {}).find(([, txid]) => (
+    (txid || '').toString().trim().toLowerCase() === normalizedTokenId
+  ))?.[0] || '';
+}
+
+function buildResolvedLinajeRecord({ slug = '', txid = '', title = '' } = {}) {
+  const normalizedSlug = slugify(slug || findLinajeSlugByTokenId(txid));
+  const indexedTxid = normalizedSlug ? findLinajeTxidBySlug(normalizedSlug) : '';
+  const normalizedTxid = [txid, indexedTxid]
+    .find((value) => isHex64((value || '').toString().trim()));
+  const safeTxid = normalizedTxid ? normalizedTxid.toString().trim().toLowerCase() : '';
+  const editorialMeta = resolveLinajeMeta({ slug: normalizedSlug, txid: safeTxid });
+  const displayTitle = editorialMeta?.title
+    || editorialMeta?.nombreCompleto
+    || editorialMeta?.name
+    || title
+    || normalizedSlug
+    || shortHex(safeTxid, 10, 8);
+  const resolvedImage = pickNftImageUrl({
+    local: editorialMeta,
+    debugLabel: `family-record:${normalizedSlug || safeTxid || displayTitle}`,
+  });
+
+  return {
+    slug: normalizedSlug,
+    txid: safeTxid,
+    title: displayTitle || '',
+    etapa: editorialMeta?.etapa || '',
+    image: resolvedImage.url,
+    tokenHref: safeTxid ? `/token/${safeTxid}` : '',
+    lineageHref: normalizedSlug || safeTxid ? `/linaje/${normalizedSlug || safeTxid}` : '',
+    collectionHref: normalizedSlug ? `/collection/xolosnft/${normalizedSlug}` : '',
+    editorialMeta,
+  };
+}
+
+function buildLocalLinajeFallbackRecord(identifier = '') {
+  const rawIdentifier = (identifier || '').toString().trim();
+  const slug = isHex64(rawIdentifier)
+    ? findLinajeSlugByTokenId(rawIdentifier)
+    : slugify(rawIdentifier);
+  const editorialMeta = resolveLinajeMeta({ slug, txid: rawIdentifier });
+  if (!editorialMeta) return null;
+
+  const record = buildResolvedLinajeRecord({
+    slug: editorialMeta.slug || slug,
+    txid: editorialMeta.txid || editorialMeta.tokenId || rawIdentifier,
+    title: editorialMeta.title || editorialMeta.nombreCompleto || rawIdentifier,
+  });
+
+  return {
+    ...record,
+    rawValue: rawIdentifier,
+    indexedTxid: record.slug ? findLinajeTxidBySlug(record.slug) : '',
+    parsed: null,
+    opReturnText: '',
+    sourceKind: 'local',
+  };
+}
+
+function resolveLinajeMetaForToken({ tokenId = '', ipfsMeta = null, token = null } = {}) {
+  const normalizedTokenId = (tokenId || '').toString().trim().toLowerCase();
+  const direct = resolveLinajeMeta({ txid: normalizedTokenId });
+  if (direct) return direct;
+
+  const slugCandidates = [
+    ipfsMeta?.slug,
+    buildLinajeSlug({ NOMBRE: ipfsMeta?.name || '' }),
+    buildLinajeSlug({ NOMBRE: token?.tokenName || token?.genesisInfo?.tokenName || '' }),
+    slugify(ipfsMeta?.name || ''),
+    slugify(token?.tokenName || token?.genesisInfo?.tokenName || ''),
+  ].filter(Boolean);
+
+  for (const slug of slugCandidates) {
+    const match = resolveLinajeMeta({ slug, txid: normalizedTokenId });
+    if (match) return match;
+  }
+
+  return null;
+}
+
+function resolveFamilyReference(rawValue) {
+  const rawText = rawValue === undefined || rawValue === null ? '' : String(rawValue).trim();
+  if (!rawText || rawText === '—') {
+    return {
+      rawValue: rawText,
+      tokenId: '',
+      txid: '',
+      slug: '',
+      title: '',
+      etapa: '',
+      image: '',
+      tokenHref: '',
+      lineageHref: '',
+      collectionHref: '',
+      resolved: false,
+    };
+  }
+
+  if (isHex64(rawText)) {
+    const record = buildResolvedLinajeRecord({ txid: rawText });
+    return {
+      rawValue: rawText,
+      tokenId: record.txid,
+      txid: record.txid,
+      slug: record.slug,
+      title: record.title || shortHex(rawText, 10, 8),
+      etapa: record.etapa,
+      image: record.image,
+      tokenHref: record.tokenHref || `/token/${rawText.toLowerCase()}`,
+      lineageHref: record.lineageHref,
+      collectionHref: record.collectionHref,
+      resolved: Boolean(record.txid || record.slug || record.editorialMeta),
+    };
+  }
+
+  const slugCandidate = slugify(rawText);
+  if (slugCandidate) {
+    const record = buildResolvedLinajeRecord({ slug: slugCandidate, title: rawText });
+    if (record.slug || record.txid || record.editorialMeta) {
+      return {
+        rawValue: rawText,
+        tokenId: record.txid,
+        txid: record.txid,
+        slug: record.slug,
+        title: record.title || rawText,
+        etapa: record.etapa,
+        image: record.image,
+        tokenHref: record.tokenHref,
+        lineageHref: record.lineageHref,
+        collectionHref: record.collectionHref,
+        resolved: true,
+      };
+    }
+  }
+
+  const archiveTarget = resolveParentLinajeTarget(rawText);
+  if (archiveTarget) {
+    const record = buildResolvedLinajeRecord({
+      slug: archiveTarget.slug,
+      txid: archiveTarget.txid,
+      title: archiveTarget.title || rawText,
+    });
+    return {
+      rawValue: rawText,
+      tokenId: record.txid,
+      txid: record.txid,
+      slug: record.slug,
+      title: record.title || rawText,
+      etapa: record.etapa,
+      image: record.image,
+      tokenHref: record.tokenHref,
+      lineageHref: record.lineageHref || archiveTarget.lineageHref || '',
+      collectionHref: record.collectionHref || archiveTarget.collectionHref || '',
+      resolved: true,
+    };
+  }
+
+  return {
+    rawValue: rawText,
+    tokenId: '',
+    txid: '',
+    slug: slugCandidate,
+    title: rawText,
+    etapa: '',
+    image: '',
+    tokenHref: '',
+    lineageHref: '',
+    collectionHref: '',
+    resolved: false,
+  };
+}
+
+function buildRootFamilyNode({ tokenId = '', localMeta = null, ipfsMeta = null, token = null } = {}) {
+  const slug = findLinajeSlugByTokenId(tokenId) || slugify(localMeta?.slug || ipfsMeta?.slug || '');
+  const editorialMeta = resolveLinajeMeta({ slug, txid: tokenId }) || localMeta || null;
+  const title = pickValueWithSource({
+    local: editorialMeta?.title || editorialMeta?.nombreCompleto || editorialMeta?.name,
+    ipfs: ipfsMeta?.name || ipfsMeta?.slug,
+    onchain: token?.tokenName || token?.genesisInfo?.tokenName,
+    fallback: shortHex(tokenId, 10, 8),
+  }).value;
+  const etapa = pickValueWithSource({
+    local: editorialMeta?.etapa,
+    ipfs: ipfsMeta?.etapa,
+    onchain: '',
+    fallback: '',
+  }).value;
+  const resolvedImage = pickNftImageUrl({
+    local: editorialMeta || localMeta,
+    ipfs: ipfsMeta,
+    onchain: [token?.genesisInfo, token],
+    debugLabel: `family-root:${tokenId || slug || title}`,
+  });
+
+  return {
+    rawValue: tokenId,
+    tokenId: (tokenId || '').toString().trim().toLowerCase(),
+    txid: (tokenId || '').toString().trim().toLowerCase(),
+    slug,
+    title,
+    etapa: etapa === '—' ? '' : etapa,
+    image: resolvedImage.url,
+    tokenHref: tokenId ? `/token/${tokenId}` : '',
+    lineageHref: slug || tokenId ? `/linaje/${slug || tokenId}` : '',
+    collectionHref: slug ? `/collection/xolosnft/${slug}` : '',
+    resolved: Boolean(tokenId || slug),
+    isRoot: true,
+  };
+}
+
+function buildFamilyMatchKeys(...values) {
+  const keys = new Set();
+
+  values.forEach((value) => {
+    if (!value) return;
+    const text = String(value).trim();
+    if (!text || text === '—') return;
+
+    if (isHex64(text)) {
+      keys.add(text.toLowerCase());
+      const slugFromToken = findLinajeSlugByTokenId(text);
+      if (slugFromToken) keys.add(slugFromToken);
+    }
+
+    const slug = slugify(text);
+    if (slug) keys.add(slug);
+    buildArchiveNameVariants(text).forEach((variant) => keys.add(variant));
+  });
+
+  return keys;
+}
+
+function collectDirectDescendants(rootNode) {
+  if (!rootNode?.tokenId && !rootNode?.slug && !rootNode?.title) return [];
+
+  const rootKeys = buildFamilyMatchKeys(rootNode.tokenId, rootNode.slug, rootNode.title, rootNode.rawValue);
+  if (!rootKeys.size) return [];
+
+  return Object.entries(LINAJE_EDITORIAL_META || {})
+    .map(([metaSlug, meta]) => {
+      if (!meta || typeof meta !== 'object') return null;
+
+      const parentRefs = [meta.padre, meta.madre].filter(Boolean);
+      if (!parentRefs.length) return null;
+
+      const hasMatch = parentRefs.some((value) => {
+        const valueKeys = buildFamilyMatchKeys(value);
+        return Array.from(valueKeys).some((key) => rootKeys.has(key));
+      });
+      if (!hasMatch) return null;
+
+      const record = buildResolvedLinajeRecord({
+        slug: meta.slug || metaSlug,
+        txid: meta.txid || meta.tokenId || meta.nftTokenId,
+      });
+
+      return {
+        rawValue: record.txid || record.slug || metaSlug,
+        tokenId: record.txid,
+        txid: record.txid,
+        slug: record.slug,
+        title: record.title,
+        etapa: record.etapa,
+        image: record.image,
+        tokenHref: record.tokenHref,
+        lineageHref: record.lineageHref,
+        collectionHref: record.collectionHref,
+        resolved: true,
+      };
+    })
+    .filter(Boolean)
+    .filter((entry, index, list) => list.findIndex((candidate) => (
+      `${candidate.tokenId || ''}|${candidate.slug || ''}|${candidate.title || ''}`
+      === `${entry.tokenId || ''}|${entry.slug || ''}|${entry.title || ''}`
+    )) === index)
+    .sort((a, b) => a.title.localeCompare(b.title, 'es', { sensitivity: 'base' }));
+}
+
+function resolveParentLinajeTarget(rawName) {
+  if (!rawName || typeof rawName !== 'string') return null;
+
+  const variants = buildArchiveNameVariants(rawName);
+  for (const variant of variants) {
+    const match = LINAJE_ARCHIVE_NAME_LOOKUP.get(variant);
+    if (match) return match;
+  }
+
+  return null;
 }
 
 function hasMeaningfulValue(value) {
@@ -387,6 +795,51 @@ function enrichLinajeRecord(record, txid) {
     indexedTxid,
     editorialMeta,
   };
+}
+
+function buildLocalLinajeGalleryRecords() {
+  return Object.entries(LINAJE_EDITORIAL_META || {})
+    .map(([metaSlug, meta], index) => {
+      if (!meta || typeof meta !== 'object') return null;
+
+      const record = buildLocalLinajeFallbackRecord(meta.slug || metaSlug || meta.txid || meta.tokenId || '');
+      if (!record) return null;
+
+      const sexoValue = meta?.sexo || '';
+      const variedadValue = meta?.variedad || '';
+      const tags = Array.isArray(meta?.tags) ? meta.tags.join(' ') : '';
+      const searchText = [
+        record.slug,
+        record.txid,
+        meta?.title,
+        meta?.nombreCompleto,
+        meta?.subtitle,
+        meta?.color,
+        meta?.variedad,
+        meta?.sexo,
+        tags,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+      return {
+        id: `local-${record.txid || record.slug || index}`,
+        tx: record.txid ? { txid: record.txid, block: null } : null,
+        index,
+        parsed: null,
+        slug: record.slug,
+        indexedTxid: record.indexedTxid,
+        editorialMeta: meta,
+        opReturnText: '',
+        sexoFilter: normalizeSexoFilterValue(sexoValue),
+        variedadFilter: (variedadValue || '').toString().trim().toLowerCase(),
+        hasIndexedSlug: isHex64(record.indexedTxid),
+        searchText,
+        sourceKind: 'local',
+      };
+    })
+    .filter(Boolean);
 }
 
 async function fetchRecentLinajeMatches(maxBlocks = 20, txPageSize = 25) {
@@ -610,7 +1063,23 @@ function SectionTitle({ children }) {
   return <h2 style={{ marginTop: '28px', marginBottom: '12px' }}>{children}</h2>;
 }
 
-function LinajeCard({ tx, opReturnText, parsed, slug = '', editorialMeta = null, indexedTxid = '', showDetailLink = true }) {
+function formatFamilyDisplayValue(value) {
+  if (!hasRenderableMetadataValue(value)) return '—';
+  const target = resolveFamilyReference(value);
+  if (target?.resolved && target?.title) return target.title;
+  return value;
+}
+
+function LinajeCard({
+  tx,
+  opReturnText,
+  parsed,
+  slug = '',
+  editorialMeta = null,
+  indexedTxid = '',
+  showDetailLink = true,
+  sourceKind = 'official',
+}) {
   const sexoMap = {
     H: 'Hembra',
     M: 'Macho',
@@ -618,7 +1087,8 @@ function LinajeCard({ tx, opReturnText, parsed, slug = '', editorialMeta = null,
   const [imageFailed, setImageFailed] = React.useState(false);
 
   const resolvedSlug = slug || buildLinajeSlug(parsed);
-  const localMeta = editorialMeta || resolveLinajeMeta({ slug: resolvedSlug, txid: tx?.txid });
+  const resolvedTxid = tx?.txid || editorialMeta?.txid || editorialMeta?.tokenId || indexedTxid || '';
+  const localMeta = editorialMeta || resolveLinajeMeta({ slug: resolvedSlug, txid: resolvedTxid });
   const displayName = localMeta?.title || localMeta?.nombreCompleto || parsed?.NOMBRE || 'Sin nombre';
   const displaySexo = localMeta?.sexo || (parsed?.SEXO ? sexoMap[parsed.SEXO] || parsed.SEXO : '—');
   const resolvedImage = React.useMemo(
@@ -629,7 +1099,7 @@ function LinajeCard({ tx, opReturnText, parsed, slug = '', editorialMeta = null,
   const placeholderText = localMeta?.imagePlaceholder || (displayName ? displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase() : 'XOLO');
   const imageAlt = localMeta?.imageAlt || `Retrato de ${displayName}`;
   const showImage = Boolean(mediaUrl) && !imageFailed;
-  const detailPath = resolvedSlug ? `/linaje/${resolvedSlug}` : `/linaje/${tx.txid}`;
+  const detailPath = resolvedSlug ? `/linaje/${resolvedSlug}` : (resolvedTxid ? `/linaje/${resolvedTxid}` : '');
   const localIndexTxid = indexedTxid || (resolvedSlug ? findLinajeTxidBySlug(resolvedSlug) : '');
   const hasIndexedSlug = isHex64(localIndexTxid);
   const ficha = {
@@ -641,8 +1111,8 @@ function LinajeCard({ tx, opReturnText, parsed, slug = '', editorialMeta = null,
     lugarNacimiento: localMeta?.lugarNacimiento || parsed?.LUGAR || '—',
     fechaNacimiento: localMeta?.fechaNacimiento || parsed?.NAC || '—',
     criador: localMeta?.criador || '—',
-    padre: localMeta?.padre || '—',
-    madre: localMeta?.madre || '—',
+    padre: formatFamilyDisplayValue(localMeta?.padre),
+    madre: formatFamilyDisplayValue(localMeta?.madre),
     camada: localMeta?.camada || '—',
     microchip: localMeta?.microchip || '—',
     registroFCM: localMeta?.registroFCM || '—',
@@ -673,7 +1143,9 @@ function LinajeCard({ tx, opReturnText, parsed, slug = '', editorialMeta = null,
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
         <div>
-          <div style={{ color: '#8ff7ff', fontSize: '0.85rem', letterSpacing: '0.04em' }}>FICHA OFICIAL DE LINAJE</div>
+          <div style={{ color: '#8ff7ff', fontSize: '0.85rem', letterSpacing: '0.04em' }}>
+            {sourceKind === 'local' ? 'FICHA LOCAL DE ARCHIVO' : 'FICHA OFICIAL DE LINAJE'}
+          </div>
           <h3 style={{ margin: '6px 0 0', fontSize: '1.4rem', color: '#d6ffff' }}>{displayName}</h3>
           {localMeta?.subtitle && (
             <div style={{ marginTop: '6px', color: '#8ff7ff', fontSize: '0.95rem' }}>{localMeta.subtitle}</div>
@@ -690,7 +1162,7 @@ function LinajeCard({ tx, opReturnText, parsed, slug = '', editorialMeta = null,
             textTransform: 'uppercase',
           }}
         >
-          XOLO | RAMIREZ
+          {sourceKind === 'local' ? 'ARCHIVO LOCAL' : 'XOLO | RAMIREZ'}
         </div>
       </div>
 
@@ -813,15 +1285,15 @@ function LinajeCard({ tx, opReturnText, parsed, slug = '', editorialMeta = null,
           <strong>Capa editorial local:</strong> {localMeta ? 'Disponible' : 'No encontrada'}
         </div>
         <div style={{ color: '#8ff7ff' }}>
-          <strong>TXID:</strong> <TxLink txid={tx.txid} />
+          <strong>TXID:</strong> {resolvedTxid ? <TxLink txid={resolvedTxid} /> : '—'}
         </div>
         <div style={{ marginTop: '6px', color: '#8ff7ff' }}>
           <strong>Bloque:</strong>{' '}
-          {tx.block?.height !== undefined ? (
+          {tx?.block?.height !== undefined ? (
             <BlockLink hashOrHeight={tx.block.height}>{tx.block.height}</BlockLink>
-          ) : 'Mempool'}
+          ) : (sourceKind === 'local' ? 'Archivo local' : 'Mempool')}
         </div>
-        {showDetailLink && (
+        {showDetailLink && detailPath && (
           <div style={{ marginTop: '8px' }}>
             <Link to={detailPath} style={{ color: '#7dffe4' }}>
               Ver registro individual
@@ -1028,7 +1500,7 @@ function LinajeGalleryCard({ record }) {
         )}
 
         <div style={{ marginTop: '10px', color: '#8ff7ff', fontSize: '0.8rem' }}>
-          <strong>TX:</strong> {tx?.txid ? shortHex(tx.txid, 12, 10) : '—'}
+          <strong>TX:</strong> {tx?.txid ? shortHex(tx.txid, 12, 10) : 'Archivo local'}
         </div>
         <div style={{ marginTop: '4px', color: '#8ff7ff', fontSize: '0.8rem' }}>
           <strong>Bloque:</strong> {tx?.block?.height !== undefined ? tx.block.height : 'Mempool'}
@@ -1324,6 +1796,126 @@ function resolveCollectionDisplayItem(item, ipfsMeta = null) {
     theme,
     accent,
   };
+}
+
+function buildRelatedXoloPreviewData(target) {
+  if (!target || (!target.slug && !target.txid)) return null;
+
+  const editorialMeta = resolveLinajeMeta({ slug: target.slug, txid: target.txid });
+  if (!editorialMeta) return null;
+
+  const title = pickValueWithSource({
+    local: editorialMeta.title || editorialMeta.nombreCompleto || editorialMeta.name,
+    ipfs: '',
+    onchain: target.title,
+    fallback: target.slug || shortHex(target.txid, 10, 8),
+  }).value;
+  const etapa = pickValueWithSource({
+    local: editorialMeta.etapa,
+    ipfs: '',
+    onchain: '',
+    fallback: '',
+  }).value;
+  const resolvedImage = pickNftImageUrl({
+    local: editorialMeta,
+    debugLabel: `related-xolo:${target.slug || target.txid || title}`,
+  });
+
+  return {
+    title,
+    etapa: hasRenderableMetadataValue(etapa) && etapa !== '—' ? etapa : '',
+    imageUrl: resolvedImage.url,
+    lineageHref: target.lineageHref || '',
+    collectionHref: target.collectionHref || '',
+  };
+}
+
+function RelatedXoloPreviewCard({ target }) {
+  const [imageFailed, setImageFailed] = React.useState(false);
+  const preview = React.useMemo(() => buildRelatedXoloPreviewData(target), [target]);
+
+  React.useEffect(() => {
+    setImageFailed(false);
+  }, [preview?.imageUrl]);
+
+  if (!preview) return null;
+
+  const showImage = Boolean(preview.imageUrl) && !imageFailed;
+
+  return (
+    <div
+      style={{
+        marginTop: '8px',
+        maxWidth: '320px',
+        border: '1px solid #1c515b',
+        borderRadius: '12px',
+        background: 'linear-gradient(160deg, rgba(6, 18, 24, 0.96) 0%, rgba(9, 28, 34, 0.96) 100%)',
+        boxShadow: '0 0 16px rgba(0, 234, 255, 0.08)',
+        overflow: 'hidden',
+      }}
+    >
+      <div style={{ display: 'grid', gridTemplateColumns: '88px minmax(0, 1fr)', minHeight: '88px' }}>
+        <div
+          style={{
+            borderRight: '1px solid #143c45',
+            background: 'linear-gradient(160deg, #071117 0%, #0d1d25 100%)',
+            display: 'grid',
+            placeItems: 'center',
+            overflow: 'hidden',
+          }}
+        >
+          {showImage ? (
+            <img
+              src={preview.imageUrl}
+              alt={preview.title}
+              loading="lazy"
+              onError={() => setImageFailed(true)}
+              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+            />
+          ) : (
+            <div
+              style={{
+                color: '#9feeff',
+                fontSize: '0.68rem',
+                letterSpacing: '0.08em',
+                textAlign: 'center',
+                padding: '8px',
+                fontWeight: 700,
+              }}
+            >
+              XOLO
+            </div>
+          )}
+        </div>
+        <div style={{ display: 'grid', gap: '6px', padding: '10px 12px' }}>
+          <div style={{ color: '#eafcff', fontWeight: 700, lineHeight: 1.2 }}>{preview.title}</div>
+          {preview.etapa && (
+            <div style={{ color: '#8fdce4', fontSize: '0.76rem' }}>
+              etapa: <span style={{ color: '#d9faff' }}>{preview.etapa}</span>
+            </div>
+          )}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', fontSize: '0.75rem' }}>
+            {preview.lineageHref && (
+              <Link
+                to={preview.lineageHref}
+                style={{ color: '#7dffe4', textDecoration: 'underline', textUnderlineOffset: '0.18em' }}
+              >
+                Ver linaje
+              </Link>
+            )}
+            {preview.collectionHref && (
+              <Link
+                to={preview.collectionHref}
+                style={{ color: '#8ff7ff', textDecoration: 'underline', textUnderlineOffset: '0.18em' }}
+              >
+                Ver colección
+              </Link>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function normalizeDocumentHash(value) {
@@ -2540,10 +3132,19 @@ function LinajePage() {
       })
     );
 
-    return flattened.sort((a, b) => {
+    const existingKeys = new Set(flattened.map((record) => record.slug || record.tx?.txid || ''));
+    const localOnlyRecords = buildLocalLinajeGalleryRecords().filter((record) => {
+      const key = record.slug || record.tx?.txid || '';
+      return key && !existingKeys.has(key);
+    });
+
+    return [...flattened, ...localOnlyRecords].sort((a, b) => {
+      const sourceBoostA = a.sourceKind === 'local' ? -1 : 0;
+      const sourceBoostB = b.sourceKind === 'local' ? -1 : 0;
       const heightA = a.tx?.block?.height ?? -1;
       const heightB = b.tx?.block?.height ?? -1;
       if (heightA !== heightB) return heightB - heightA;
+      if (sourceBoostA !== sourceBoostB) return sourceBoostB - sourceBoostA;
       return a.index - b.index;
     });
   }, [state.matches]);
@@ -2575,8 +3176,8 @@ function LinajePage() {
 
       {!state.loading && !state.error && (
         <>
-          {state.matches.length === 0 ? (
-            <Box>No se encontraron registros oficiales de linaje en el rango escaneado.</Box>
+          {records.length === 0 ? (
+            <Box>No se encontraron registros oficiales ni entradas locales de linaje en el rango escaneado.</Box>
           ) : (
             <>
               <Box style={{ marginBottom: '14px' }}>
@@ -2684,6 +3285,7 @@ function LinajeRecordPage() {
     error: '',
     tx: null,
     records: [],
+    localRecord: null,
     resolvedBy: '',
   });
 
@@ -2692,47 +3294,90 @@ function LinajeRecordPage() {
 
     async function load() {
       try {
-        setState({ loading: true, error: '', tx: null, records: [], resolvedBy: '' });
+        setState({ loading: true, error: '', tx: null, records: [], localRecord: null, resolvedBy: '' });
         const value = (txidOrSlug || '').trim();
+        const localRecord = buildLocalLinajeFallbackRecord(value);
 
         if (!value) {
           throw new Error('Falta identificar un txid o slug de linaje.');
         }
 
         if (isHex64(value)) {
-          const tx = await chronik.tx(value);
-          const records = extractLinajeRecordsFromTx(tx);
+          try {
+            const tx = await chronik.tx(value);
+            const records = extractLinajeRecordsFromTx(tx);
 
-          if (!records.length) {
-            throw new Error('La transacción existe, pero no contiene un registro oficial de linaje XOLO|RAMIREZ.');
-          }
+            if (!records.length) {
+              if (localRecord && mounted) {
+                setState({ loading: false, error: '', tx, records: [], localRecord, resolvedBy: 'local-txid' });
+                return;
+              }
+              throw new Error('La transacción existe, pero no contiene un registro oficial de linaje XOLO|RAMIREZ.');
+            }
 
-          if (mounted) {
-            setState({ loading: false, error: '', tx, records, resolvedBy: 'txid' });
+            if (mounted) {
+              setState({ loading: false, error: '', tx, records, localRecord: null, resolvedBy: 'txid' });
+            }
+            return;
+          } catch (err) {
+            if (localRecord && mounted) {
+              setState({ loading: false, error: '', tx: null, records: [], localRecord, resolvedBy: 'local-txid' });
+              return;
+            }
+            throw err;
           }
-          return;
         }
 
         const slug = slugify(value);
         const indexedTxid = findLinajeTxidBySlug(slug);
 
         if (isHex64(indexedTxid)) {
-          const tx = await chronik.tx(indexedTxid);
-          const records = extractLinajeRecordsFromTx(tx);
-          const matchedRecord = records.find((record) => record.slug === slug);
+          try {
+            const tx = await chronik.tx(indexedTxid);
+            const records = extractLinajeRecordsFromTx(tx);
+            const matchedRecord = records.find((record) => record.slug === slug);
 
-          if (matchedRecord) {
-            if (mounted) {
+            if (matchedRecord) {
+              if (mounted) {
+                setState({
+                  loading: false,
+                  error: '',
+                  tx,
+                  records: [matchedRecord],
+                  localRecord: null,
+                  resolvedBy: 'slug-index',
+                });
+              }
+              return;
+            }
+            if (localRecord && mounted) {
               setState({
                 loading: false,
                 error: '',
                 tx,
-                records: [matchedRecord],
-                resolvedBy: 'slug-index',
+                records: [],
+                localRecord,
+                resolvedBy: 'local-slug-index',
               });
+              return;
             }
-            return;
+          } catch (err) {
+            if (!localRecord) throw err;
           }
+        }
+
+        if (localRecord) {
+          if (mounted) {
+            setState({
+              loading: false,
+              error: '',
+              tx: null,
+              records: [],
+              localRecord,
+              resolvedBy: 'local-slug',
+            });
+          }
+          return;
         }
 
         const matches = await fetchRecentLinajeMatches(250, 25);
@@ -2761,6 +3406,7 @@ function LinajeRecordPage() {
             error: err?.message || 'No se pudo cargar el registro de linaje.',
             tx: null,
             records: [],
+            localRecord: null,
             resolvedBy: '',
           });
         }
@@ -2784,7 +3430,7 @@ function LinajeRecordPage() {
       {state.loading && <LoadingBox text="Cargando registro individual..." />}
       {state.error && <ErrorBox error={state.error} />}
 
-      {!state.loading && !state.error && state.tx && (
+      {!state.loading && !state.error && (state.tx || state.localRecord) && (
         <>
           {/*
             La vista individual unifica:
@@ -2794,20 +3440,20 @@ function LinajeRecordPage() {
           */}
           {(() => {
             const primary = state.records[0] || null;
-            const enriched = primary ? enrichLinajeRecord(primary, state.tx.txid) : null;
+            const enriched = primary ? enrichLinajeRecord(primary, state.tx.txid) : state.localRecord;
             return (
           <StatGrid
             items={[
-              { label: 'TXID', value: state.tx.txid },
+              { label: 'TXID', value: enriched?.txid || state.tx?.txid || '—' },
               { label: 'Resuelto por', value: state.resolvedBy || '—' },
               { label: 'Slug narrativo', value: enriched?.slug || '—' },
               { label: 'Índice local', value: isHex64(enriched?.indexedTxid || '') ? 'Vinculado' : 'Sin vínculo' },
               { label: 'Capa editorial', value: enriched?.editorialMeta ? 'Disponible' : 'No encontrada' },
               {
                 label: 'Bloque',
-                value: state.tx.block?.height !== undefined ? (
+                value: state.tx?.block?.height !== undefined ? (
                   <BlockLink hashOrHeight={state.tx.block.height}>{state.tx.block.height}</BlockLink>
-                ) : 'Mempool',
+                ) : (state.localRecord ? 'Archivo local' : 'Mempool'),
               },
               { label: 'Registros oficiales en TX', value: formatNumber(state.records.length) },
             ]}
@@ -2816,7 +3462,19 @@ function LinajeRecordPage() {
           })()}
 
           <div style={{ marginTop: '14px', display: 'grid', gap: '14px' }}>
-            {state.records.map((record, i) => {
+            {state.localRecord && state.records.length === 0 ? (
+              <LinajeCard
+                key={`local-${state.localRecord.txid || state.localRecord.slug || txidOrSlug}`}
+                tx={state.tx || (state.localRecord.txid ? { txid: state.localRecord.txid, block: null } : null)}
+                opReturnText="Registro editorial local. No hay OP_RETURN oficial XOLO|RAMIREZ asociado a esta ficha."
+                parsed={null}
+                slug={state.localRecord.slug}
+                indexedTxid={state.localRecord.indexedTxid}
+                editorialMeta={state.localRecord.editorialMeta}
+                showDetailLink={false}
+                sourceKind="local"
+              />
+            ) : state.records.map((record, i) => {
               const enriched = enrichLinajeRecord(record, state.tx.txid);
               return (
                 <LinajeCard
@@ -2828,6 +3486,7 @@ function LinajeRecordPage() {
                   indexedTxid={enriched.indexedTxid}
                   editorialMeta={enriched.editorialMeta}
                   showDetailLink={false}
+                  sourceKind="official"
                 />
               );
             })}
@@ -3096,6 +3755,314 @@ function AddressPage() {
   );
 }
 
+function FamilyTreeNodeCard({ node, label = '', prominent = false }) {
+  const [imageFailed, setImageFailed] = React.useState(false);
+
+  React.useEffect(() => {
+    setImageFailed(false);
+  }, [node?.image]);
+
+  if (!node) return null;
+
+  const title = node.title || node.rawValue || 'Registro sin identificar';
+  const showImage = Boolean(node.image) && !imageFailed;
+  const initials = buildCollectibleInitials(title, node.tokenId || node.slug || title);
+
+  return (
+    <div
+      style={{
+        position: 'relative',
+        border: `1px solid ${prominent ? '#3fe9ff' : '#1c515b'}`,
+        borderRadius: prominent ? '16px' : '14px',
+        background: prominent
+          ? 'linear-gradient(160deg, rgba(6, 23, 30, 0.98) 0%, rgba(9, 35, 44, 0.98) 100%)'
+          : 'linear-gradient(160deg, rgba(6, 18, 24, 0.96) 0%, rgba(8, 26, 33, 0.96) 100%)',
+        boxShadow: prominent
+          ? '0 0 22px rgba(0, 234, 255, 0.16)'
+          : '0 0 14px rgba(0, 234, 255, 0.08)',
+        overflow: 'hidden',
+      }}
+    >
+      {label ? (
+        <div
+          style={{
+            padding: '6px 10px',
+            borderBottom: '1px solid #123a42',
+            color: '#8ff7ff',
+            fontSize: '0.72rem',
+            fontWeight: 700,
+            letterSpacing: '0.12em',
+            textTransform: 'uppercase',
+            background: 'rgba(0, 234, 255, 0.06)',
+          }}
+        >
+          {label}
+        </div>
+      ) : null}
+      <div
+        style={{
+          display: 'grid',
+          gap: '12px',
+          padding: prominent ? '14px' : '12px',
+          gridTemplateColumns: prominent ? '96px minmax(0, 1fr)' : '80px minmax(0, 1fr)',
+          minHeight: prominent ? '128px' : '110px',
+        }}
+      >
+        <div
+          style={{
+            borderRadius: '10px',
+            overflow: 'hidden',
+            border: '1px solid #18454f',
+            background: 'linear-gradient(160deg, #071117 0%, #0d1d25 100%)',
+            display: 'grid',
+            placeItems: 'center',
+            minHeight: prominent ? '96px' : '80px',
+          }}
+        >
+          {showImage ? (
+            <img
+              src={node.image}
+              alt={title}
+              loading="lazy"
+              onError={() => setImageFailed(true)}
+              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+            />
+          ) : (
+            <div
+              style={{
+                color: '#9feeff',
+                fontSize: prominent ? '1rem' : '0.92rem',
+                fontWeight: 700,
+                letterSpacing: '0.08em',
+              }}
+            >
+              {initials}
+            </div>
+          )}
+        </div>
+        <div style={{ display: 'grid', gap: '7px', minWidth: 0 }}>
+          <div style={{ color: '#eafcff', fontWeight: 700, lineHeight: 1.2, fontSize: prominent ? '1rem' : '0.92rem' }}>
+            {title}
+          </div>
+          {node.etapa ? (
+            <div style={{ color: '#8ff7ff', fontSize: '0.78rem', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+              {node.etapa}
+            </div>
+          ) : null}
+          {!node.resolved && node.rawValue ? (
+            <div style={{ color: '#9adbe2', fontSize: '0.8rem', wordBreak: 'break-word' }}>
+              Referencia: {node.rawValue}
+            </div>
+          ) : null}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+            {node.tokenHref ? (
+              <Link to={node.tokenHref} style={{ color: '#7dffe4', fontSize: '0.8rem' }}>
+                Ver token
+              </Link>
+            ) : null}
+            {node.lineageHref ? (
+              <Link to={node.lineageHref} style={{ color: '#7dffe4', fontSize: '0.8rem' }}>
+                Ver linaje
+              </Link>
+            ) : null}
+            {node.collectionHref ? (
+              <Link to={node.collectionHref} style={{ color: '#7dffe4', fontSize: '0.8rem' }}>
+                Ver coleccion
+              </Link>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function XoloFamilyTree({ rootNode, padreNode, madreNode, descendants = [] }) {
+  const hasParents = Boolean(
+    (padreNode && (padreNode.resolved || padreNode.rawValue))
+    || (madreNode && (madreNode.resolved || madreNode.rawValue)),
+  );
+
+  if (!rootNode) return null;
+
+  if (!hasParents) {
+    return (
+      <Box style={{ background: 'rgba(7, 24, 30, 0.68)' }}>
+        <div style={{ color: '#9adbe2', fontSize: '0.92rem' }}>
+          No hay suficientes vínculos genealógicos para construir este árbol.
+        </div>
+      </Box>
+    );
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: '16px' }}>
+      <Box style={{ overflow: 'hidden' }}>
+        <div
+          className="xolo-family-tree-grid"
+          style={{
+            display: 'grid',
+            gap: '14px',
+            gridTemplateColumns: 'minmax(0, 1fr) minmax(240px, 1.08fr) minmax(0, 1fr)',
+            alignItems: 'stretch',
+          }}
+        >
+          <div style={{ display: 'grid', alignContent: 'start', gap: '10px' }}>
+            {padreNode && (padreNode.resolved || padreNode.rawValue) ? (
+              <FamilyTreeNodeCard node={padreNode} label="Padre" />
+            ) : (
+              <div />
+            )}
+          </div>
+          <div style={{ display: 'grid', alignContent: 'end', gap: '12px' }}>
+            <div
+              aria-hidden="true"
+              style={{
+                justifySelf: 'center',
+                width: 'min(100%, 280px)',
+                height: '42px',
+                borderTop: '1px solid rgba(143, 247, 255, 0.35)',
+                borderLeft: '1px solid rgba(143, 247, 255, 0.35)',
+                borderRight: '1px solid rgba(143, 247, 255, 0.35)',
+                borderRadius: '18px 18px 0 0',
+                marginBottom: '-4px',
+              }}
+            />
+            <FamilyTreeNodeCard node={rootNode} label="Xolo actual" prominent />
+          </div>
+          <div style={{ display: 'grid', alignContent: 'start', gap: '10px' }}>
+            {madreNode && (madreNode.resolved || madreNode.rawValue) ? (
+              <FamilyTreeNodeCard node={madreNode} label="Madre" />
+            ) : (
+              <div />
+            )}
+          </div>
+        </div>
+        <style>
+          {`@media (max-width: 760px) {
+            .xolo-family-tree-grid {
+              grid-template-columns: 1fr !important;
+            }
+          }`}
+        </style>
+      </Box>
+      {descendants.length > 0 ? (
+        <Box>
+          <div style={{ color: '#8ff7ff', fontWeight: 'bold', marginBottom: '12px' }}>Descendencia</div>
+          <div
+            style={{
+              display: 'grid',
+              gap: '12px',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+            }}
+          >
+            {descendants.map((node) => (
+              <FamilyTreeNodeCard
+                key={`${node.tokenId || 'token'}-${node.slug || node.title}`}
+                node={node}
+              />
+            ))}
+          </div>
+        </Box>
+      ) : null}
+    </div>
+  );
+}
+
+function TokenFamilyTreeSection({ tokenId, token, localMeta, ipfsMeta }) {
+  const resolvedPadre = React.useMemo(() => pickValueWithSource({
+    local: localMeta?.padre,
+    ipfs: ipfsMeta?.padre || ipfsMeta?.parent,
+    onchain: '',
+    fallback: '',
+  }), [ipfsMeta, localMeta]);
+  const resolvedMadre = React.useMemo(() => pickValueWithSource({
+    local: localMeta?.madre,
+    ipfs: ipfsMeta?.madre,
+    onchain: '',
+    fallback: '',
+  }), [ipfsMeta, localMeta]);
+  const rootNode = React.useMemo(
+    () => buildRootFamilyNode({ tokenId, token, localMeta, ipfsMeta }),
+    [ipfsMeta, localMeta, token, tokenId],
+  );
+  const padreNode = React.useMemo(() => resolveFamilyReference(resolvedPadre.value), [resolvedPadre.value]);
+  const madreNode = React.useMemo(() => resolveFamilyReference(resolvedMadre.value), [resolvedMadre.value]);
+  const descendants = React.useMemo(() => collectDirectDescendants(rootNode), [rootNode]);
+
+  return (
+    <>
+      <SectionTitle>Árbol de linaje</SectionTitle>
+      <div style={{ marginBottom: '12px' }}>
+        <Link to={`/arbol/${tokenId}`} style={{ color: '#7dffe4', fontSize: '0.92rem' }}>
+          Ver árbol completo
+        </Link>
+      </div>
+      <XoloFamilyTree
+        rootNode={rootNode}
+        padreNode={padreNode}
+        madreNode={madreNode}
+        descendants={descendants}
+      />
+    </>
+  );
+}
+
+function FamilyTreePage() {
+  const { tokenId } = useParams();
+  const [state, setState] = React.useState({ loading: true, error: '', data: null });
+
+  React.useEffect(() => {
+    let mounted = true;
+    async function load() {
+      try {
+        setState({ loading: true, error: '', data: null });
+        const token = await chronik.token(tokenId);
+        if (mounted) setState({ loading: false, error: '', data: token });
+      } catch (err) {
+        if (mounted) setState({ loading: false, error: err?.message || 'No se pudo cargar el token.', data: null });
+      }
+    }
+    load();
+    return () => { mounted = false; };
+  }, [tokenId]);
+
+  const token = state.data;
+  const ipfsState = useTokenIpfsMetadata(tokenId, token);
+  const localMeta = React.useMemo(
+    () => resolveLinajeMetaForToken({ tokenId, ipfsMeta: ipfsState.metadata || null, token }),
+    [ipfsState.metadata, token, tokenId],
+  );
+
+  return (
+    <Shell>
+      <SearchBar />
+      <div style={{ marginTop: '20px', color: '#8ff7ff', wordBreak: 'break-word' }}>
+        Árbol genealógico: <strong>{shortHex(tokenId, 20, 16)}</strong>
+      </div>
+      <div style={{ marginTop: '8px' }}>
+        <Link to={`/token/${tokenId}`} style={{ color: '#7dffe4', fontSize: '0.92rem' }}>
+          Volver al token
+        </Link>
+      </div>
+
+      {state.loading && <LoadingBox />}
+      {state.error && <ErrorBox error={state.error} />}
+
+      {token ? (
+        <div style={{ marginTop: '24px' }}>
+          <TokenFamilyTreeSection
+            tokenId={tokenId}
+            token={token}
+            localMeta={localMeta}
+            ipfsMeta={ipfsState.metadata || null}
+          />
+        </div>
+      ) : null}
+    </Shell>
+  );
+}
+
 function TokenPage() {
   const { tokenId } = useParams();
   const [state, setState] = React.useState({ loading: true, error: '', data: null });
@@ -3121,9 +4088,12 @@ function TokenPage() {
   }, [tokenId]);
 
   const token = state.data;
-  const localMeta = React.useMemo(() => resolveLinajeMeta({ txid: tokenId }), [tokenId]);
   const ipfsState = useTokenIpfsMetadata(tokenId, token);
   const ipfsMeta = ipfsState.metadata || null;
+  const localMeta = React.useMemo(
+    () => resolveLinajeMetaForToken({ tokenId, ipfsMeta, token }),
+    [ipfsMeta, token, tokenId],
+  );
   const [imageFailed, setImageFailed] = React.useState(false);
   const onChainDocumentHash = React.useMemo(() => extractTokenDocumentHash(token), [token]);
   const sourceDocumentUrl = ipfsState.resolvedUrl || ipfsState.documentUrl || token?.genesisInfo?.url || token?.url || '';
@@ -3202,6 +4172,14 @@ function TokenPage() {
     onchain: '',
     fallback: '—',
   });
+  const resolvedPadreTarget = React.useMemo(
+    () => resolveFamilyReference(resolvedPadre.value),
+    [resolvedPadre.value],
+  );
+  const resolvedMadreTarget = React.useMemo(
+    () => resolveFamilyReference(resolvedMadre.value),
+    [resolvedMadre.value],
+  );
   const resolvedCamada = pickValueWithSource({
     local: localMeta?.camada,
     ipfs: ipfsMeta?.camada,
@@ -3324,6 +4302,13 @@ function TokenPage() {
     && integrityState.computedHash === onChainDocumentHash;
   const ipfsFetchFailed = ipfsState.attempted && !ipfsState.ok;
   const canCompare = hasOnChainHash && ipfsState.ok && Boolean(ipfsState.rawText);
+  const shouldShowFamilyTree = Boolean(
+    localMeta
+    || findLinajeSlugByTokenId(token?.tokenId || tokenId)
+    || hasRenderableMetadataValue(resolvedPadre.value)
+    || hasRenderableMetadataValue(resolvedMadre.value)
+    || hasRenderableMetadataValue(resolvedEtapa.value),
+  );
   const integrityStatus = !hasOnChainHash
     ? 'unavailable'
     : hashMatches
@@ -3363,6 +4348,33 @@ function TokenPage() {
     setImageFailed(false);
   }, [resolvedImage.url]);
 
+  const renderResolvedParentValue = (value, target) => {
+    if (!target?.lineageHref || !hasRenderableMetadataValue(value)) return value;
+    const label = target?.resolved && target?.title ? target.title : value;
+
+    return (
+      <Link
+        to={target.lineageHref}
+        title={target.title || value}
+        style={{
+          color: '#7dffe4',
+          textDecoration: 'underline',
+          textUnderlineOffset: '0.18em',
+        }}
+      >
+        {label}
+      </Link>
+    );
+  };
+
+  const renderResolvedParentField = (label, value, target) => (
+    <div>
+      <strong style={{ color: '#8ff7ff' }}>{label}:</strong> {renderResolvedParentValue(value, target)}
+      {/* Resolved parents get an inline archive preview card; unresolved values stay plain text. */}
+      {target ? <RelatedXoloPreviewCard target={target} /> : null}
+    </div>
+  );
+
   return (
     <Shell>
       <SearchBar />
@@ -3386,6 +4398,15 @@ function TokenPage() {
               { label: 'URL', value: token.url || token.genesisInfo?.url || '—' },
             ]}
           />
+
+          {shouldShowFamilyTree ? (
+            <TokenFamilyTreeSection
+              tokenId={token.tokenId || tokenId}
+              token={token}
+              localMeta={localMeta}
+              ipfsMeta={ipfsMeta}
+            />
+          ) : null}
 
           <SectionTitle>Metadatos IPFS</SectionTitle>
           <Box>
@@ -3434,8 +4455,8 @@ function TokenPage() {
               <div><strong style={{ color: '#8ff7ff' }}>name:</strong> {resolvedName.value}</div>
               <div><strong style={{ color: '#8ff7ff' }}>description:</strong> {resolvedDescription.value}</div>
               <div><strong style={{ color: '#8ff7ff' }}>etapa:</strong> {resolvedEtapa.value}</div>
-              <div><strong style={{ color: '#8ff7ff' }}>padre:</strong> {resolvedPadre.value}</div>
-              <div><strong style={{ color: '#8ff7ff' }}>madre:</strong> {resolvedMadre.value}</div>
+              {renderResolvedParentField('padre', resolvedPadre.value, resolvedPadreTarget)}
+              {renderResolvedParentField('madre', resolvedMadre.value, resolvedMadreTarget)}
               <div><strong style={{ color: '#8ff7ff' }}>camada:</strong> {resolvedCamada.value}</div>
               <div><strong style={{ color: '#8ff7ff' }}>registroFCM:</strong> {resolvedRegistroFCM.value}</div>
               <div><strong style={{ color: '#8ff7ff' }}>microchip:</strong> {resolvedMicrochip.value}</div>
@@ -3566,6 +4587,8 @@ export default function App() {
         <Route path="/tx/:txid" element={<TxPage />} />
         <Route path="/address/:address" element={<AddressPage />} />
         <Route path="/token/:tokenId" element={<TokenPage />} />
+        <Route path="/arbol/:tokenId" element={<FamilyTreePage />} />
+        <Route path="/genealogia/:tokenId" element={<FamilyTreePage />} />
         <Route path="/search/:hash" element={<SearchHashPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>

@@ -4,10 +4,11 @@ import { ChronikClient } from 'chronik-client';
 import * as ecashaddr from 'ecashaddrjs';
 import { findLinajeTxidBySlug } from './data/linajeIndex';
 import { LINAJE_EDITORIAL_META, resolveLinajeMeta } from './data/linajeMeta';
+import { XoloCard } from './components/XoloCard';
 import {
   extractTokenDocumentUrl,
   fetchIpfsMetadataByDocumentUrl,
-  resolveIpfsUri,
+  pickNftImageUrl,
   sha256HexFromString,
 } from './utils/ipfsMetadata';
 
@@ -620,7 +621,11 @@ function LinajeCard({ tx, opReturnText, parsed, slug = '', editorialMeta = null,
   const localMeta = editorialMeta || resolveLinajeMeta({ slug: resolvedSlug, txid: tx?.txid });
   const displayName = localMeta?.title || localMeta?.nombreCompleto || parsed?.NOMBRE || 'Sin nombre';
   const displaySexo = localMeta?.sexo || (parsed?.SEXO ? sexoMap[parsed.SEXO] || parsed.SEXO : '—');
-  const mediaUrl = localMeta?.image || localMeta?.coverUrl || localMeta?.avatarUrl || '';
+  const resolvedImage = React.useMemo(
+    () => pickNftImageUrl({ local: localMeta, debugLabel: `linaje-card:${resolvedSlug || tx?.txid || displayName}` }),
+    [displayName, localMeta, resolvedSlug, tx?.txid],
+  );
+  const mediaUrl = resolvedImage.url;
   const placeholderText = localMeta?.imagePlaceholder || (displayName ? displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase() : 'XOLO');
   const imageAlt = localMeta?.imageAlt || `Retrato de ${displayName}`;
   const showImage = Boolean(mediaUrl) && !imageFailed;
@@ -652,6 +657,10 @@ function LinajeCard({ tx, opReturnText, parsed, slug = '', editorialMeta = null,
     : Object.entries(localMeta?.links || {})
       .filter(([, href]) => typeof href === 'string' && href.trim())
       .map(([key, href]) => ({ label: key, href }));
+
+  React.useEffect(() => {
+    setImageFailed(false);
+  }, [mediaUrl]);
 
   return (
     <div
@@ -907,11 +916,19 @@ function LinajeGalleryCard({ record }) {
   const displayColor = localMeta?.color || parsed?.COLOR || '—';
   const hasIndexedSlug = isHex64(indexedTxid);
   const detailPath = resolvedSlug ? `/linaje/${resolvedSlug}` : `/linaje/${tx?.txid || ''}`;
-  const mediaUrl = localMeta?.image || localMeta?.coverUrl || localMeta?.avatarUrl || '';
+  const resolvedImage = React.useMemo(
+    () => pickNftImageUrl({ local: localMeta, debugLabel: `linaje-gallery:${resolvedSlug || tx?.txid || displayName}` }),
+    [displayName, localMeta, resolvedSlug, tx?.txid],
+  );
+  const mediaUrl = resolvedImage.url;
   const placeholderText = localMeta?.imagePlaceholder || (displayName ? displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase() : 'XOLO');
   const imageAlt = localMeta?.imageAlt || `Retrato de ${displayName}`;
   const showImage = Boolean(mediaUrl) && !imageFailed;
   const tags = Array.isArray(localMeta?.tags) ? localMeta.tags.filter(Boolean).slice(0, 3) : [];
+
+  React.useEffect(() => {
+    setImageFailed(false);
+  }, [mediaUrl]);
 
   return (
     <article
@@ -1076,50 +1093,6 @@ function TokenLink({ tokenId, children }) {
   );
 }
 
-function normalizeMediaUrl(value) {
-  if (!value || typeof value !== 'string') return '';
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-  return resolveIpfsUri(trimmed);
-}
-
-function extractImageLikeField(input) {
-  if (!input) return '';
-  if (typeof input === 'string') {
-    const text = input.trim();
-    const seemsImage = /^data:image\//i.test(text)
-      || /\.(png|jpg|jpeg|webp|gif|avif|svg)(\?|#|$)/i.test(text)
-      || /image|thumbnail|cover|avatar|icon|logo|art/i.test(text);
-    return seemsImage ? normalizeMediaUrl(text) : '';
-  }
-  if (Array.isArray(input)) {
-    for (const value of input) {
-      const found = extractImageLikeField(value);
-      if (found) return found;
-    }
-    return '';
-  }
-  if (typeof input === 'object') {
-    const candidateKeys = [
-      'image', 'imageUrl', 'imageURL', 'imageUri', 'imageURI',
-      'cover', 'coverUrl', 'coverURL',
-      'thumbnail', 'thumbnailUrl', 'thumbnailURL',
-      'avatar', 'avatarUrl', 'avatarURL',
-      'icon', 'iconUrl', 'iconURL',
-      'logo', 'logoUrl', 'logoURL',
-      'artwork', 'artworkUrl', 'previewImage',
-      'url', 'uri',
-    ];
-    for (const key of candidateKeys) {
-      if (key in input) {
-        const found = extractImageLikeField(input[key]);
-        if (found) return found;
-      }
-    }
-  }
-  return '';
-}
-
 function buildCollectibleInitials(label, tokenId) {
   const base = (label || '').trim();
   if (base) {
@@ -1268,6 +1241,7 @@ function buildXoloNftCollectionItems() {
         title,
         subtitle,
         slug: normalizedSlug,
+        editorialMeta: meta,
         tokenId,
         tokenSymbol,
         tokenName,
@@ -1278,7 +1252,7 @@ function buildXoloNftCollectionItems() {
         backgroundNote,
         etapa,
         tags,
-        imageUrl: extractImageLikeField(meta),
+        imageUrl: pickNftImageUrl({ local: meta, debugLabel: `collection-item:${normalizedSlug || tokenId || title}` }).url,
         imageAlt: meta.imageAlt || `Imagen de ${title}`,
         searchText: `${title} ${subtitle} ${normalizedSlug} ${tokenSymbol} ${tokenName} ${narrative} ${etapa} ${tags.join(' ')}`.toLowerCase(),
       };
@@ -1306,12 +1280,12 @@ function resolveCollectionDisplayItem(item, ipfsMeta = null) {
     onchain: '',
     fallback: '',
   }).value;
-  const imageUrl = pickValueWithSource({
-    local: item.imageUrl,
-    ipfs: extractImageLikeField(ipfsMeta),
-    onchain: '',
-    fallback: '',
-  }).value;
+  const resolvedImage = pickNftImageUrl({
+    local: item.editorialMeta || item.imageUrl,
+    ipfs: ipfsMeta,
+    onchain: item.tokenMeta || null,
+    debugLabel: `collection-display:${item.slug || item.tokenId || item.id || item.title}`,
+  });
   const etapa = pickValueWithSource({
     local: item.etapa,
     ipfs: ipfsMeta?.etapa,
@@ -1342,7 +1316,9 @@ function resolveCollectionDisplayItem(item, ipfsMeta = null) {
     title,
     subtitle,
     narrative,
-    imageUrl,
+    imageUrl: resolvedImage.url,
+    imageRaw: resolvedImage.raw,
+    imageSource: resolvedImage.source,
     etapa,
     tags,
     theme,
@@ -1394,12 +1370,16 @@ function NftCollectibleCard({ item }) {
   const lineageSlug = typeof item.editorialMeta?.slug === 'string' ? item.editorialMeta.slug.trim() : '';
   const lineageTxid = typeof item.editorialMeta?.txid === 'string' ? item.editorialMeta.txid.trim() : '';
   const lineageHref = (lineageSlug || lineageTxid) ? `/linaje/${lineageSlug || lineageTxid}` : '';
-  const imageUrl = pickValueWithSource({
-    local: extractImageLikeField(localMeta),
-    ipfs: extractImageLikeField(ipfsMeta),
-    onchain: extractImageLikeField([item.tokenMeta?.genesisInfo, item.tokenMeta]),
-    fallback: '',
-  }).value;
+  const resolvedImage = React.useMemo(
+    () => pickNftImageUrl({
+      local: localMeta,
+      ipfs: ipfsMeta,
+      onchain: [item.tokenMeta?.genesisInfo, item.tokenMeta],
+      debugLabel: `collectible-card:${item.tokenId}`,
+    }),
+    [ipfsMeta, item.tokenId, item.tokenMeta, localMeta],
+  );
+  const imageUrl = resolvedImage.url;
   const etapaValue = pickValueWithSource({
     local: localMeta?.etapa,
     ipfs: ipfsMeta?.etapa,
@@ -1426,6 +1406,10 @@ function NftCollectibleCard({ item }) {
   }).value;
   const showImage = Boolean(imageUrl) && !imageFailed;
   const placeholderText = buildCollectibleInitials(resolvedName.value, item.tokenId);
+
+  React.useEffect(() => {
+    setImageFailed(false);
+  }, [imageUrl]);
   const actionLinkStyle = {
     display: 'inline-flex',
     alignItems: 'center',
@@ -1537,6 +1521,11 @@ function XoloNftCollectionCard({ item }) {
   };
   const showImage = Boolean(resolvedItem.imageUrl) && !imageFailed;
   const placeholderText = buildCollectibleInitials(resolvedItem.title, item.tokenId || item.slug);
+
+  React.useEffect(() => {
+    setImageFailed(false);
+  }, [resolvedItem.imageUrl]);
+
   const primaryContent = (
     <>
       <div
@@ -1713,6 +1702,11 @@ function XoloNftCodexCard({ item }) {
     color: '#b4fbff',
     letterSpacing: '0.02em',
   };
+
+  React.useEffect(() => {
+    setImageFailed(false);
+  }, [resolvedItem.imageUrl]);
+
   const primaryContent = (
     <>
       <div
@@ -1884,6 +1878,7 @@ function XoloNftCodexPage() {
 
 function XoloNftCollectionItemPage() {
   const { slug } = useParams();
+  const [imageFailed, setImageFailed] = React.useState(false);
   const collectionItems = React.useMemo(() => buildXoloNftCollectionItems(), []);
   const normalizedSlug = slugify((slug || '').trim());
   const item = React.useMemo(
@@ -1940,6 +1935,11 @@ function XoloNftCollectionItemPage() {
   };
   const resolvedMetaLabelStyle = { ...metaLabelStyle, color: themeStyles.label };
   const resolvedMetaValueStyle = { ...metaValueStyle, color: themeStyles.value };
+  const showImage = Boolean(resolvedItem.imageUrl) && !imageFailed;
+
+  React.useEffect(() => {
+    setImageFailed(false);
+  }, [resolvedItem.imageUrl]);
 
   return (
     <Shell>
@@ -1979,11 +1979,12 @@ function XoloNftCollectionItemPage() {
             overflow: 'hidden',
           }}
         >
-          {resolvedItem.imageUrl ? (
+          {showImage ? (
             <img
               src={resolvedItem.imageUrl}
               alt={item.imageAlt || resolvedItem.title}
               style={{ width: '100%', minHeight: '320px', maxHeight: '520px', objectFit: 'cover', display: 'block' }}
+              onError={() => setImageFailed(true)}
             />
           ) : (
             <div style={{ color: themeStyles.placeholder, fontWeight: 'bold', letterSpacing: '0.12em', fontSize: '1.5rem' }}>
@@ -3123,6 +3124,7 @@ function TokenPage() {
   const localMeta = React.useMemo(() => resolveLinajeMeta({ txid: tokenId }), [tokenId]);
   const ipfsState = useTokenIpfsMetadata(tokenId, token);
   const ipfsMeta = ipfsState.metadata || null;
+  const [imageFailed, setImageFailed] = React.useState(false);
   const onChainDocumentHash = React.useMemo(() => extractTokenDocumentHash(token), [token]);
   const sourceDocumentUrl = ipfsState.resolvedUrl || ipfsState.documentUrl || token?.genesisInfo?.url || token?.url || '';
 
@@ -3173,12 +3175,15 @@ function TokenPage() {
     onchain: token?.description || token?.genesisInfo?.description,
     fallback: '—',
   });
-  const resolvedImage = pickValueWithSource({
-    local: extractImageLikeField(localMeta),
-    ipfs: extractImageLikeField(ipfsMeta),
-    onchain: extractImageLikeField([token?.genesisInfo, token]),
-    fallback: '',
-  });
+  const resolvedImage = React.useMemo(
+    () => pickNftImageUrl({
+      local: localMeta,
+      ipfs: ipfsMeta,
+      onchain: [token?.genesisInfo, token],
+      debugLabel: `token-page:${tokenId}`,
+    }),
+    [ipfsMeta, localMeta, token, tokenId],
+  );
   const resolvedEtapa = pickValueWithSource({
     local: localMeta?.etapa,
     ipfs: ipfsMeta?.etapa,
@@ -3354,6 +3359,10 @@ function TokenPage() {
           label: 'No se pudo verificar',
         };
 
+  React.useEffect(() => {
+    setImageFailed(false);
+  }, [resolvedImage.url]);
+
   return (
     <Shell>
       <SearchBar />
@@ -3366,6 +3375,8 @@ function TokenPage() {
 
       {token && (
         <>
+          <XoloCard tokenId={token.tokenId || tokenId} />
+
           <StatGrid
             items={[
               { label: 'Token ID', value: token.tokenId || tokenId },
@@ -3389,13 +3400,34 @@ function TokenPage() {
                 No se pudieron cargar metadatos IPFS.
               </div>
             )}
-            {resolvedImage.value && (
+            {resolvedImage.url && !imageFailed && (
               <div style={{ marginBottom: '10px' }}>
                 <img
-                  src={resolvedImage.value}
+                  src={resolvedImage.url}
                   alt={resolvedName.value !== '—' ? resolvedName.value : `NFT ${shortHex(tokenId, 12, 8)}`}
-                  style={{ width: '100%', maxWidth: '440px', border: '1px solid #1c515b', display: 'block' }}
+                  style={{ width: '100%', maxWidth: '440px', border: '1px solid #1c515b', borderRadius: '12px', objectFit: 'cover', display: 'block' }}
+                  onError={() => setImageFailed(true)}
                 />
+              </div>
+            )}
+            {resolvedImage.url && imageFailed && (
+              <div
+                style={{
+                  marginBottom: '10px',
+                  width: '100%',
+                  maxWidth: '440px',
+                  minHeight: '220px',
+                  border: '1px solid #1c515b',
+                  borderRadius: '12px',
+                  background: 'linear-gradient(160deg, #071117 0%, #0d1d25 100%)',
+                  display: 'grid',
+                  placeItems: 'center',
+                  color: '#9feeff',
+                  fontWeight: 'bold',
+                  letterSpacing: '0.06em',
+                }}
+              >
+                {buildCollectibleInitials(resolvedName.value, tokenId)}
               </div>
             )}
             <div style={{ display: 'grid', gap: '7px' }}>

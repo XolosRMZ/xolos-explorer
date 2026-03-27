@@ -4,6 +4,29 @@ const LINAJE_META_VERSION = '2026-03-07';
 // Fuente de verdad on-chain: el OP_RETURN siempre manda.
 // Este archivo solo agrega contexto curatorial (bio, alias, fotos, tags, etc.).
 export const LINAJE_EDITORIAL_META = Object.freeze({
+  'humo-ramirez': {
+    slug: 'humo-ramirez',
+    txid: '13a2fd97493e2c15ec1077465da11dd602e86fbf4e200b9c4bb72dab78c199ea',
+    tokenId: '13a2fd97493e2c15ec1077465da11dd602e86fbf4e200b9c4bb72dab78c199ea',
+    title: 'Humo Ramirez',
+    subtitle: 'Archivo del Linaje Vivo - Registro On-Chain',
+    narrative: 'Humo Ramirez es un ejemplar macho de la variedad Sin Pelo y color Negro, nacido el 18 de octubre de 2025. Humo representa la vitalidad y pureza del afijo Ramirez. Su registro on-chain está blindado biométricamente mediante un microchip subdermal (ISO 11784/11785) verificado y leído exitosamente antes de su consolidación on-chain.',
+    nombreCompleto: 'Humo Ramirez',
+    afijo: 'Ramirez',
+    etapa: 'adulto joven',
+    sexo: 'Macho',
+    color: 'Negro',
+    variedad: 'Sin pelo',
+    fechaNacimiento: '2025-10-18',
+    criador: 'Fernando Ramirez Gutierrez / Alexandra Ramirez Gutierrez',
+    microchip: '900255002683036',
+    padre: 'a4c6f91bc781ae03d82b71345715b9590a5cbea5ccccd4a9d505fef1da5b7bc3',
+    madre: 'gema_ramirez_placeholder_id',
+    theme: 'codex',
+    accent: '#00eaff',
+    tags: ['linaje', 'xoloitzcuintle', 'ramirez', 'humo', 'microchip', 'on-chain'],
+    nota: 'Vínculo físico-digital verificado mediante escáner de microchip 900255002683036. Padres: Ticuiz Langarica y Gema Ramirez.',
+  },
   'tika-ramirez': {
     slug: 'tika-ramirez',
     title: 'Tika Ramírez',

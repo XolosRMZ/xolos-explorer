@@ -368,6 +368,37 @@ export const LINAJE_EDITORIAL_META = Object.freeze({
     accent: '#00eaff',
     tags: ['linaje', 'xoloitzcuintle', 'ramirez', 'humo', 'microchip', 'on-chain'],
     nota: 'Vínculo físico-digital verificado mediante escáner de microchip 900255002683036. Padres: Ticuiz Langarica y Gema Ramirez.'
+  },
+  'tejocote-ramirez': {
+    slug: 'tejocote-ramirez',
+    txid: '407bf5b92211cd2c77c6b8ca95d9cdc7e5d40f201b2348a0c886ed3f52c5f12e',
+    tokenId: '407bf5b92211cd2c77c6b8ca95d9cdc7e5d40f201b2348a0c886ed3f52c5f12e',
+    title: 'Tejocote Ramirez',
+    nombreCompleto: 'Tejocote (Ramirez/Ramirez) Mex.FCI.',
+    afijo: 'Ramirez',
+    sexo: 'Macho',
+    color: 'Negro',
+    variedad: 'Sin pelo',
+    talla: 'Intermedio',
+    fechaNacimiento: '2026-01-18',
+    lugarNacimiento: 'Ciudad de Mexico, Mexico',
+    criador: 'Xolos Ramirez',
+    registroFCM: 'FCMZZ4032-A',
+    microchip: '939000002748329',
+    padre: '94fc64e3bea9ae9d333ff22cdf84925552d6922919958c86c9651fde64b0c4cb',
+    madre: '6e02dbf7fb0e16d833aad89422094306dcd1ce002b9037a55fed47e304551353',
+    tags: [
+      'xoloitzcuintle',
+      'linaje',
+      'ramirez',
+      'tejocote',
+      'intermedio',
+      'negro',
+      'macho'
+    ],
+    theme: 'genesis-line',
+    accent: '#111111',
+    nota: 'Hijo de Aztlan Ramirez y Copal Ramirez. Nodo de nueva generacion dentro del archivo del linaje vivo.'
   }
 });
 

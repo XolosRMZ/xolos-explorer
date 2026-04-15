@@ -16,7 +16,8 @@ export const LINAJE_SLUG_INDEX = Object.freeze({
   'uxmal-avila': '1dc6943cc081e410646c1466653a1c6937815ce6a05253f0e541620e47bb3d7f',
   'humo-ramirez': '13a2fd97493e2c15ec1077465da11dd602e86fbf4e200b9c4bb72dab78c199ea',
   'aztlan-ramirez': 'Draft_Token_AZTLAN_RAMIREZ_FCMD4169-B',
-  'copal-ramirez': 'Draft_Token_COPAL_RAMIREZ_FCMZZ2531-C'
+  'copal-ramirez': 'Draft_Token_COPAL_RAMIREZ_FCMZZ2531-C',
+  'tejocote-ramirez': '407bf5b92211cd2c77c6b8ca95d9cdc7e5d40f201b2348a0c886ed3f52c5f12e'
 });
 
 function normalizeSlugKey(slug) {

@@ -399,6 +399,37 @@ export const LINAJE_EDITORIAL_META = Object.freeze({
     theme: 'genesis-line',
     accent: '#111111',
     nota: 'Hijo de Aztlan Ramirez y Copal Ramirez. Nodo de nueva generacion dentro del archivo del linaje vivo.'
+  },
+  'mitla-ramirez': {
+    slug: 'mitla-ramirez',
+    txid: 'ce37133f74d42ee1e5b4574a7b9bde9623200a61172f350b3e47f746fdf5cbad',
+    tokenId: 'ce37133f74d42ee1e5b4574a7b9bde9623200a61172f350b3e47f746fdf5cbad',
+    title: 'Mitla Ramirez',
+    nombreCompleto: 'Mitla (Ramirez/Ramirez) Mex.FCI.',
+    afijo: 'Ramirez',
+    sexo: 'Hembra',
+    color: 'Mariposa',
+    variedad: 'Sin pelo',
+    talla: 'Intermedio',
+    fechaNacimiento: '2026-01-18',
+    lugarNacimiento: 'Ciudad de Mexico, Mexico',
+    criador: 'Xolos Ramirez',
+    registroFCM: 'FCMZZ4032-C',
+    microchip: '93900002748330',
+    padre: '94fc64e3bea9ae9d333ff22cdf84925552d6922919958c86c9651fde64b0c4cb',
+    madre: '6e02dbf7fb0e16d833aad89422094306dcd1ce002b9037a55fed47e304551353',
+    tags: [
+      'xoloitzcuintle',
+      'linaje',
+      'ramirez',
+      'mitla',
+      'intermedio',
+      'mariposa',
+      'hembra'
+    ],
+    theme: 'genesis-line',
+    accent: '#6f6a66',
+    nota: 'Hija de Aztlan Ramirez y Copal Ramirez. Nodo de nueva generacion dentro del archivo del linaje vivo.'
   }
 });
 

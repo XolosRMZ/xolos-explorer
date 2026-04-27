@@ -18,6 +18,7 @@ export const LINAJE_SLUG_INDEX = Object.freeze({
   'aztlan-ramirez': 'Draft_Token_AZTLAN_RAMIREZ_FCMD4169-B',
   'copal-ramirez': 'Draft_Token_COPAL_RAMIREZ_FCMZZ2531-C',
   'tejocote-ramirez': '407bf5b92211cd2c77c6b8ca95d9cdc7e5d40f201b2348a0c886ed3f52c5f12e',
+  'misha-ramirez': '4628220c6bb119148f320fd943f3957a12367ade2282e5fcaaae18d92b8f9909',
   'mitla-ramirez': 'ce37133f74d42ee1e5b4574a7b9bde9623200a61172f350b3e47f746fdf5cbad'
 });
 

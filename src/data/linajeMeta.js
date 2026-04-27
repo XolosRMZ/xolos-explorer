@@ -461,6 +461,37 @@ export const LINAJE_EDITORIAL_META = Object.freeze({
     theme: 'genesis-line',
     accent: '#6f6a66',
     nota: 'Hija de Aztlan Ramirez y Copal Ramirez. Nodo de nueva generacion dentro del archivo del linaje vivo.'
+  },
+  'luna-ramirez': {
+    slug: 'luna-ramirez',
+    txid: '094639e668c24620ec9f2107f68b55eb4766c3fee41261fc624117d4fa805fd4',
+    tokenId: '094639e668c24620ec9f2107f68b55eb4766c3fee41261fc624117d4fa805fd4',
+    title: 'Luna Ramirez',
+    nombreCompleto: 'Luna (Ramirez/Ramirez) Mex.',
+    afijo: 'Ramirez',
+    sexo: 'Hembra',
+    color: 'Negro',
+    variedad: 'Sin pelo',
+    etapa: 'Recién nacido',
+    fechaNacimiento: '2026-04-20',
+    lugarNacimiento: 'Ciudad de México, México',
+    criador: 'Xolos Ramírez',
+    padre: 'Draft_Token_BOLERO_RAMIREZ_FCMZZ1560-A', // Bolero Ramirez
+    madre: 'gema_ramirez_placeholder_id', // Gema Ramirez
+    theme: 'genesis-line',
+    accent: '#1e1e1e',
+    tags: [
+      'xoloitzcuintle',
+      'linaje',
+      'ramirez',
+      'luna',
+      'recien-nacido',
+      'sin-pelo',
+      'hembra',
+      'negro',
+      'on-chain'
+    ],
+    nota: 'NFT minteado exitosamente. Hermana de camada de Mixa Ramirez. Acta digital de nacimiento verificada on-chain. Camada del 20 de abril de 2026.'
   }
 });
 

@@ -369,6 +369,37 @@ export const LINAJE_EDITORIAL_META = Object.freeze({
     tags: ['linaje', 'xoloitzcuintle', 'ramirez', 'humo', 'microchip', 'on-chain'],
     nota: 'Vínculo físico-digital verificado mediante escáner de microchip 900255002683036. Padres: Ticuiz Langarica y Gema Ramirez.'
   },
+  'misha-ramirez': {
+    slug: 'misha-ramirez',
+    txid: '4628220c6bb119148f320fd943f3957a12367ade2282e5fcaaae18d92b8f9909',
+    tokenId: '4628220c6bb119148f320fd943f3957a12367ade2282e5fcaaae18d92b8f9909',
+    title: 'Misha Ramirez',
+    nombreCompleto: 'Misha (Ramirez/Ramirez) Mex.',
+    afijo: 'Ramirez',
+    sexo: 'Hembra',
+    color: 'Negro',
+    variedad: 'Con pelo',
+    talla: 'Miniatura',
+    fechaNacimiento: '2026-04-14',
+    lugarNacimiento: 'Ciudad de Mexico, Mexico',
+    criador: 'Xolos Ramirez',
+    padre: '415b0d971d78ccf465c8a0b99b74edee950e0bdbacc6a941cb8f44b1874867f4', // Ikal Caliente
+    madre: 'a4c358ca51058e3b893a3579c0d558bec17a5854d2fd7200aa0d42b8c0ea76ca', // Rima Langarica
+    tags: [
+      'xoloitzcuintle',
+      'linaje',
+      'ramirez',
+      'misha',
+      'miniatura',
+      'con-pelo',
+      'hembra',
+      'cachorro',
+      'on-chain'
+    ],
+    theme: 'genesis-line',
+    accent: '#222222',
+    nota: 'NFT minteado exitosamente. Hija de Ikal Caliente y Rima Langarica. Registro temprano de nacimiento en el Archivo del Linaje Vivo. Variedad con pelo, talla miniatura. Rasgo único en foto de génesis: El primer "Mlem".'
+  },
   'tejocote-ramirez': {
     slug: 'tejocote-ramirez',
     txid: '407bf5b92211cd2c77c6b8ca95d9cdc7e5d40f201b2348a0c886ed3f52c5f12e',

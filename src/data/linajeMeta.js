@@ -492,6 +492,37 @@ export const LINAJE_EDITORIAL_META = Object.freeze({
       'on-chain'
     ],
     nota: 'NFT minteado exitosamente. Hermana de camada de Mixa Ramirez. Acta digital de nacimiento verificada on-chain. Camada del 20 de abril de 2026.'
+  },
+  'onix-ramirez': {
+    slug: 'onix-ramirez',
+    txid: 'efec4f67bad956de425122d0496071842832433d349209f6f201898dc737477b',
+    tokenId: 'efec4f67bad956de425122d0496071842832433d349209f6f201898dc737477b',
+    title: 'Onix Ramirez',
+    nombreCompleto: 'Onix (Ramirez/Ramirez) Mex.',
+    afijo: 'Ramirez',
+    sexo: 'Macho',
+    color: 'Negro',
+    variedad: 'Sin pelo',
+    etapa: 'Recién nacido',
+    fechaNacimiento: '2026-04-20',
+    lugarNacimiento: 'Ciudad de México, México',
+    criador: 'Xolos Ramírez',
+    padre: 'Draft_Token_BOLERO_RAMIREZ_FCMZZ1560-A', // Bolero Ramirez
+    madre: 'gema_ramirez_placeholder_id', // Gema Ramirez
+    theme: 'genesis-line',
+    accent: '#121212',
+    tags: [
+      'xoloitzcuintle',
+      'linaje',
+      'ramirez',
+      'onix',
+      'recien-nacido',
+      'sin-pelo',
+      'macho',
+      'negro',
+      'on-chain'
+    ],
+    nota: 'NFT minteado exitosamente. Hermano de camada de Mixa y Luna Ramirez. Acta digital de nacimiento verificada on-chain. Camada del 20 de abril de 2026.'
   }
 });
 

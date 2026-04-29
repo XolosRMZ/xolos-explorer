@@ -223,6 +223,38 @@ export const LINAJE_EDITORIAL_META = Object.freeze({
     accent: '#a0a0a0',
     tags: ['linaje', 'xoloitzcuintle', 'intermedio', 'macho', 'bolero', 'ramirez', 'ojosazules']
   },
+  'chimalma-ramirez': {
+    slug: 'chimalma-ramirez',
+    txid: 'c490864b0c4cd2cbe163a573e830c22d7e270207062903f9f2f0e08fca6a13f6',
+    tokenId: 'c490864b0c4cd2cbe163a573e830c22d7e270207062903f9f2f0e08fca6a13f6',
+    title: 'Chimalma Ramirez',
+    nombreCompleto: 'Chimalma (Ramirez/Ramirez) Mex.',
+    afijo: 'Ramirez',
+    sexo: 'Hembra',
+    color: 'Bermejo',
+    variedad: 'Sin pelo',
+    etapa: 'Recién nacido',
+    fechaNacimiento: '2026-04-27',
+    lugarNacimiento: 'Ciudad de México, México',
+    criador: 'Xolos Ramírez',
+    padre: 'koox_ramirez_placeholder_id', // Koox Ramirez
+    madre: 'zia_ramirez_placeholder_id', // Zia Ramirez
+    theme: 'genesis-line',
+    accent: '#d97d7d',
+    tags: [
+      'xoloitzcuintle',
+      'linaje',
+      'ramirez',
+      'chimalma',
+      'recien-nacido',
+      'sin-pelo',
+      'hembra',
+      'bermejo',
+      'copete-blanco',
+      'on-chain'
+    ],
+    nota: 'NFT minteado exitosamente. Acta digital de nacimiento verificada on-chain. Representa una nueva vida dentro del legado del xoloitzcuintle mexicano: fuerza ancestral, ternura y memoria viva de una raza sagrada.'
+  },
   'chontal-ramirez': {
     slug: 'chontal-ramirez',
     txid: 'fb0f49f9b6c5b701c637afbe6c10088fe11b4689bdf7a3800e62ba1a192499ab',

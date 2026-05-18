@@ -12,6 +12,7 @@ export const LINAJE_SLUG_INDEX = Object.freeze({
   'jicamo-lopez': '44b35bf6dfb472b982bf6964f9eeb6783b5eea5ab71e7adb84246b61ff4371f5',
   'ticuiz-langarica': 'a4c6f91bc781ae03d82b71345715b9590a5cbea5ccccd4a9d505fef1da5b7bc3',
   'bolero-ramirez': 'Draft_Token_BOLERO_RAMIREZ_FCMZZ1560-A',
+  'amixtli-ramirez': '3033fe4d51767d196597df41d14ecdb4822b4c9e48be630035a76b7d301b502a',
   'chontal-ramirez': 'fb0f49f9b6c5b701c637afbe6c10088fe11b4689bdf7a3800e62ba1a192499ab',
   'chimalma-ramirez': 'c490864b0c4cd2cbe163a573e830c22d7e270207062903f9f2f0e08fca6a13f6',
   'uxmal-avila': '1dc6943cc081e410646c1466653a1c6937815ce6a05253f0e541620e47bb3d7f',

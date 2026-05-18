@@ -23,6 +23,60 @@ export const LINAJE_EDITORIAL_META = Object.freeze({
     backgroundNote: 'Registro editorial local usado para completar la genealogía.',
     tags: ['linaje', 'xoloitzcuintle', 'ramirez', 'tika'],
   },
+  'amixtli-ramirez': {
+    slug: 'amixtli-ramirez',
+    txid: '3033fe4d51767d196597df41d14ecdb4822b4c9e48be630035a76b7d301b502a',
+    tokenId: '3033fe4d51767d196597df41d14ecdb4822b4c9e48be630035a76b7d301b502a',
+
+    title: 'Amixtli Ramírez',
+    subtitle: 'Registro de Linaje - Microchip Verificado',
+
+    narrative: 'Amixtli Ramírez es una xoloitzcuintle hembra talla intermedia, variedad sin pelo, color negro, nacida el 3 de mayo de 2025 dentro del linaje de Xolos Ramírez. Hija de Pandero Ramírez y Tula Ramírez, su identidad física queda vinculada mediante microchip al archivo digital on-chain de Xolos Ramírez en la blockchain de eCash.',
+
+    nombreCompleto: 'AMIXTLI (RAMÍREZ/RAMÍREZ) MEX.',
+    afijo: 'Ramírez',
+
+    etapa: 'cachorro',
+    origen: 'microchip',
+
+    sexo: 'Hembra',
+    color: 'negro',
+    variedad: 'sin-pelo',
+    talla: 'intermedia',
+
+    displayColor: 'Negro',
+    displayVariedad: 'Sin Pelo',
+
+    fechaNacimiento: '2025-05-03',
+    lugarNacimiento: 'Ciudad de México, México',
+
+    criador: 'Xolos Ramírez',
+
+    microchip: '900255002683040',
+    registroFCM: null,
+
+    padre: '7f0004c748fd06f4a7770b8d48c27b1f3492b81be8fe02df1a8bc9b96f91e9b3',
+    madre: 'c6d67d82b53c2d94751ee3aaf487fcdac2c945319f65b435fc29b198d3e8e95',
+
+    theme: 'codex',
+    accent: '#111111',
+
+    tags: [
+      'xoloitzcuintle',
+      'linaje',
+      'ramirez',
+      'amixtli',
+      'hembra',
+      'intermedia',
+      'sin-pelo',
+      'negro',
+      'microchip',
+      'registro-fisico-digital',
+      'on-chain'
+    ],
+
+    nota: 'NFT minteado exitosamente. Registro físico-digital vinculado mediante microchip 900255002683040. Hija de Pandero Ramírez y Tula Ramírez.'
+  },
   'tomate-ramirez': {
     slug: 'tomate-ramirez',
     txid: 'cc43d40fa21304cfde5271a2f897fc0deff14c4854fa2b8f9f58c5a0ab4b171a',

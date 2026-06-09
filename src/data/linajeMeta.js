@@ -609,6 +609,62 @@ export const LINAJE_EDITORIAL_META = Object.freeze({
       'on-chain'
     ],
     nota: 'NFT minteado exitosamente. Hermano de camada de Mixa y Luna Ramirez. Acta digital de nacimiento verificada on-chain. Camada del 20 de abril de 2026.'
+  },
+  'puka-ramirez': {
+    slug: 'puka-ramirez',
+    txid: '26fb361599ec6ce20b9259f6ec59433bbed50a83dedef706bcef7a5323fe1694',
+    tokenId: '26fb361599ec6ce20b9259f6ec59433bbed50a83dedef706bcef7a5323fe1694',
+
+    title: 'Puka Ramírez',
+    subtitle: 'Registro de Linaje - Microchip Verificado On-Chain',
+
+    narrative: 'Puka Ramírez es un xoloitzcuintle macho de dos años, variedad sin pelo y color negro, perteneciente al linaje de Xolos Ramírez. Hijo de Uxmal Ávila (FCI color mariposa sin pelo) y de Jade Ramírez (variedad con pelo color negro). Su identidad física queda blindada y vinculada mediante microchip al archivo digital on-chain de eCash, uniendo identidad, cultura y tecnología al servicio de la raza.',
+
+    nombreCompleto: 'PUKA (RAMÍREZ/RAMÍREZ) MEX.',
+    afijo: 'Ramírez',
+
+    etapa: 'adulto',
+    origen: 'microchip',
+
+    sexo: 'Macho',
+    color: 'negro',
+    variedad: 'sin-pelo',
+
+    displayColor: 'Negro',
+    displayVariedad: 'Sin Pelo',
+
+    fechaNacimiento: '2024-06-09',
+    lugarNacimiento: 'Ciudad de México, México',
+
+    criador: 'Xolos Ramírez',
+
+    microchip: '900255002683037',
+    registroFCM: null,
+
+    padre: '1dc6943cc081e410646c1466653a1c6937815ce6a05253f0e541620e47bb3d7f', // Uxmal Avila / Uxmal Ramirez FCI
+    madre: 'jade_ramirez_placeholder_id', // Jade Ramirez
+
+    theme: 'codex',
+    accent: '#111111',
+
+    tags: [
+      'xoloitzcuintle',
+      'linaje',
+      'ramirez',
+      'puka',
+      'macho',
+      'sin-pelo',
+      'negro',
+      'microchip',
+      'registro-fisico-digital',
+      'on-chain'
+    ],
+
+    social: {
+      blog: 'https://xolosramirez.com/blog/2026-06-09-registro-de-linaje-puka-ramirez.html'
+    },
+
+    nota: 'NFT minteado exitosamente vía Tonalli Wallet. Registro físico-digital vinculado mediante microchip 900255002683037. Hijo de Uxmal Ávila y Jade Ramírez.'
   }
 });
 
